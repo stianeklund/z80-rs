@@ -14,7 +14,6 @@ impl Interconnect {
     }
 
     pub fn execute_cpu(&mut self) -> u32 {
-        let vblank: bool = false;
         // self.cpu.debug = true;
         let mut cycles_executed: usize = 0;
         // Cycles per frame should be: 3072000
@@ -27,9 +26,6 @@ impl Interconnect {
 
             cycles_executed += self.cpu.cycles - start_cycles;
             self.cpu.poll_interrupt();
-            if vblank {
-                self.cpu.generate_interrupt();
-            }
         }
 
         self.frame_count += 1;

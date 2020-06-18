@@ -1,10 +1,12 @@
+use std::ops::Add;
+
 use crate::instruction_info::{Instruction, Register, Register::*};
 use crate::memory::{Memory, MemoryRW};
-use std::ops::Add;
 
 pub struct Cpu {
     pub current_instruction: String,
     pub opcode: u16,
+    pub next_opcode: u16,
     pub breakpoint: bool,
     pub debug: bool,
     pub reg: Registers,
@@ -54,7 +56,7 @@ pub struct Registers {
 pub struct Io {
     pub port: u8,
     pub value: u8,
-    input: bool,
+    pub input: bool,
     output: bool,
 }
 
@@ -86,6 +88,7 @@ pub struct Flags {
 // http://z80.info/z80info.htm (see f)
 #[derive(Default, Debug)]
 pub struct Interrupt {
+    pub halt: bool, // Has the CPU halted?
     pub irq: bool,
     pub vector: u8,
     pub nmi_pending: bool,
@@ -94,7 +97,6 @@ pub struct Interrupt {
     pub iff1: bool,
     pub iff2: bool,
     pub mode: u8,
-    pub data: u8,
 }
 
 impl Flags {
@@ -196,13 +198,15 @@ impl MemoryRW for Cpu {
             return self.memory[addr] = byte;
         } else {
             if addr < 0x4000 {
-                eprintln!("Attempting write to ROM: {:04x}", addr);
-                eprintln!("Called by:{:#?}", self.instruction);
+                self.memory.ram[addr as usize] = byte;
+                // eprintln!("Attempting write to ROM: {:04x}", addr);
+                // eprintln!("Called by:{:#?}", self.instruction);
+                // panic!("");
             } else if addr < 0x5000 {
                 self.memory.ram[addr as usize - 0x4000] = byte;
             } else if addr == 0x5000 {
                 self.int_pending = true;
-                self.int.irq = true;
+            // self.int.irq = true;
             } else {
                 self.memory.ram[addr as usize] = byte;
             }
@@ -214,6 +218,7 @@ impl Cpu {
     pub fn new() -> Cpu {
         Cpu {
             opcode: 0,
+            next_opcode: 0,
             reg: Registers::default(),
             flags: Flags::new(),
             cycles: 0,
@@ -256,7 +261,10 @@ impl Cpu {
                     "Called by:{}, Opcode:{:02X}",
                     self.current_instruction, self.opcode
                 );
-                eprintln!("Instruction:{:?}", Instruction::decode(self.opcode));
+                eprintln!(
+                    "Instruction:{:?}",
+                    Instruction::decode(self.opcode, self.next_opcode)
+                );
                 panic!("Register not supported:{:#?}", reg)
             }
         }
@@ -490,7 +498,7 @@ impl Cpu {
         self.flags.xf = result & 0x08 != 0;
         self.flags.nf = false;
         self.flags.hf = true;
-        self.flags.pf = self.parity(result);
+        self.flags.pf = self.parity(result as u8);
         self.flags.cf = false;
 
         self.reg.a = result as u8;
@@ -658,22 +666,24 @@ impl Cpu {
         self.adv_pc(3);
     }
 
-    fn call(&mut self, opcode: u16) {
+    fn call(&mut self, addr: u16) {
         let ret: u16 = self.reg.pc.wrapping_add(3);
-        match opcode {
+        self.reg.prev_pc = self.reg.pc;
+        self.memory[self.reg.sp.wrapping_sub(1)] = (ret >> 8) as u8;
+        // Low order byte
+        self.memory[self.reg.sp.wrapping_sub(2)] = ret as u8;
+        // Push return address to stack
+        self.reg.sp = self.reg.sp.wrapping_sub(2);
+        match addr {
             0xCC | 0xCD | 0xC4 | 0xD4 | 0xDC | 0xE4 | 0xEC | 0xF4 | 0xFC | 0x66 => {
-                // High order byte
-                self.memory[self.reg.sp.wrapping_sub(1)] = (ret >> 8) as u8;
-                // Low order byte
-                self.memory[self.reg.sp.wrapping_sub(2)] = ret as u8;
-                // Push return address to stack
-                self.reg.sp = self.reg.sp.wrapping_sub(2);
+                self.reg.pc = self.read16(self.reg.pc + 1);
             }
-            _ => panic!(format!("Unknown call opcode: {:04x}", opcode)),
+            _ => {
+                println!("CALL to address:{:04X}", addr);
+                self.reg.pc = addr;
+            },
         };
 
-        self.reg.prev_pc = self.reg.pc;
-        self.reg.pc = self.read16(self.reg.pc + 1);
         self.adv_cycles(17);
     }
 
@@ -879,7 +889,7 @@ impl Cpu {
     }
 
     fn set_interrupt_mode(&mut self, mode: u8) {
-        println!("Setting interrupt mode 2");
+        // println!("Setting interrupt mode 2");
         self.int.mode = mode;
         self.adv_cycles(8);
         self.adv_pc(2);
@@ -1023,15 +1033,21 @@ impl Cpu {
         self.adv_pc(self.instruction.bytes as u16);
         self.adv_cycles(self.instruction.cycles as usize);
     }
-    // 0xDD Instruction LD IX/IY or IXH IYL etc + *
+    // 0xDD // 0xFD Instruction LD IX/IY or IXH IYL etc + *
     // E.g stores A to the memory location pointed to by IX + *
     fn ld_dd(&mut self, dst: Register, src: Register) {
         let b = self.read8(self.reg.pc + 1) as u16;
-        let pair = self.get_pair(dst);
-        match src {
+        let pair = self.get_pair(src);
+        match dst {
             A => self.memory[pair + b] = self.read_reg(src),
+            B => self.memory[pair + b] = self.read_reg(src),
+            C => self.memory[pair + b] = self.read_reg(src),
+            D => self.memory[pair + b] = self.read_reg(src),
+            E => self.memory[pair + b] = self.read_reg(src),
+            H => self.memory[pair + b] = self.read_reg(src),
+            L => self.memory[pair + b] = self.read_reg(src),
             _ => panic!(
-                "DD prefixed LD unknown destination: {:?}, src:{:?}",
+                "DD / FD prefixed LD unknown destination: {:?}, src:{:?}",
                 dst, src
             ),
         };
@@ -1368,11 +1384,11 @@ impl Cpu {
     fn out(&mut self, reg: Register) {
         // Set port:
         let port = self.read8(self.reg.pc + 1);
-        let string = String::new();
-        if self.debug {
+        /*if self.debug {
             println!("Out port: {:02x}, value: {:02x}", port, self.read_reg(reg));
-        }
-        self.io.port = self.read_reg(reg);
+        }*/
+        self.io.value = self.read_reg(reg);
+        self.io.port = port;
         self.adv_cycles(11);
         self.adv_pc(2);
     }
@@ -1476,6 +1492,7 @@ impl Cpu {
         self.memory[self.reg.sp.wrapping_sub(2)] = ret as u8;
         self.reg.sp = self.reg.sp.wrapping_sub(2);
         self.reg.prev_pc = self.reg.pc;
+        self.adv_pc(1);
         self.reg.pc = value;
         self.adv_cycles(11);
     }
@@ -1507,7 +1524,8 @@ impl Cpu {
 
     pub(crate) fn fetch(&mut self) {
         self.opcode = self.read8(self.reg.pc) as u16;
-        self.instruction = Instruction::decode(self.opcode)
+        self.next_opcode = self.read8(self.reg.pc + 1) as u16;
+        self.instruction = Instruction::decode(self.opcode, self.next_opcode)
             .expect(format!("Unknown opcode:{:04X}", self.opcode).as_str());
 
         if self.instruction.name.to_string().len() < 1 {
@@ -1519,8 +1537,9 @@ impl Cpu {
 
     pub fn decode(&mut self, opcode: u16) {
         use self::Register::*;
+        // self.debug = true;
         if self.debug {
-            println!("{:?}", self);
+            println!("{}", self);
         }
 
         self.reg.r = (self.reg.r & 0x80) | (self.reg.r.wrapping_add(1)) & 0x7f;
@@ -1660,7 +1679,7 @@ impl Cpu {
             0x74 => self.ld(HL, H),
             0x75 => self.ld(HL, L),
 
-            0x76 => self.hlt(),
+            0x76 => self.halt(),
             0x77 => self.ld(HL, A),
 
             0x78 => self.ld(A, B),
@@ -1813,7 +1832,7 @@ impl Cpu {
             0xDD => {
                 self.opcode = self.read8(self.reg.pc + 1) as u16;
                 self.reg.r = (self.reg.r & 0x80) | self.reg.r.wrapping_add(1) & 0x7f;
-                self.instruction = Instruction::decode(self.opcode)
+                self.instruction = Instruction::decode(self.opcode, self.next_opcode)
                     .expect(format!("Unknown opcode:{:04x}", self.opcode).as_str());
 
                 match self.opcode {
@@ -1898,10 +1917,12 @@ impl Cpu {
                     0xA0 => self.ldi(),
                     0xA1 => self.cpi(),
                     0xB0 => self.ldir(),
+                    0x42 => self.sbc(BC),
                     0x43 => self.ld_nn(BC),
                     0x46 => self.set_interrupt_mode(0),
                     0x47 => self.ld(I, A),
                     0x50 => self.in_c(D),
+                    0x52 => self.sbc(DE),
                     0x53 => self.ld_nn(DE),
                     0x5E => self.set_interrupt_mode(2),
                     0x56 => self.set_interrupt_mode(1),
@@ -1921,7 +1942,7 @@ impl Cpu {
                     0x7B => self.load_indirect(SP),
                     0x7A => self.adc_hl(SP),
                     0x7E => self.set_interrupt_mode(2),
-                    _ => panic!("{:#?}", Instruction::decode(self.opcode)),
+                    _ => panic!("{:#?}", Instruction::decode(self.opcode, self.next_opcode)),
                 }
             }
 
@@ -1944,8 +1965,9 @@ impl Cpu {
                 self.opcode = self.read8(self.reg.pc + 1) as u16;
                 self.reg.r = (self.reg.r & 0x80) | (self.reg.r.wrapping_add(1)) & 0x7f;
                 match self.opcode {
-                    0x09 => unimplemented!("{:04x}", self.opcode),
-                    0x19 => unimplemented!("{:04x}", self.opcode),
+                    0x09 => self.add_ex(IY, BC),
+                    0x6E => self.ld_dd(L, IY),// ld l,(iy+*)
+                    0x19 => self.add_ex(IY, DE),
                     0x21 => {
                         self.reg.iy = self.read16(self.reg.pc + 2);
                         self.adv_pc(4);
@@ -1963,12 +1985,13 @@ impl Cpu {
                     0x24 => unimplemented!(),
                     0x25 => unimplemented!(),
                     0x26 => unimplemented!(),
-                    0x29 => unimplemented!(),
+                    0x29 => self.add_ex(IY, IY),
                     0x2A => unimplemented!(),
                     0x2B => self.dex(IY),
                     0x2D => unimplemented!(),
                     0x2C => unimplemented!(),
                     0x2E => unimplemented!(),
+                    0x39 => self.add_ex(IY, SP),
                     0xE1 => self.pop(IY),
                     0xE5 => self.push(IY),
                     0xE9 => {
@@ -1990,7 +2013,7 @@ impl Cpu {
                         self.adv_pc(3);
                         self.adv_cycles(19);
                     }
-                    _ => panic!("{:#?}", Instruction::decode(self.opcode)),
+                    _ => panic!("{:#?}", Instruction::decode(self.opcode, self.next_opcode)),
                 }
             }
             0xFE => self.cp(),
@@ -2011,19 +2034,18 @@ impl Cpu {
         self.reg.r = 0;
         // Reset flag conditions
         self.flags.set(0xff);
-        self.int.mode = 1;
+        self.int.mode = 0;
         self.int.iff1 = false;
         self.int.iff2 = false;
+        self.int.halt = false;
     }
 
-    // TODO interrupt handle
-    fn hlt(&mut self) {
-        if self.int.irq && self.int.int {
-            ::std::process::exit(1);
-        }
-        eprintln!("Halting CPU");
-        self.adv_cycles(7);
-        ::std::process::exit(1);
+    // http://www.z80.info/z80syntx.htm#HALT
+    fn halt(&mut self) {
+        self.int.halt = true;
+        // self.int.nmi_pending = true; // We're pending on an interrupt, finish this instruction first
+        self.adv_cycles(4);
+        self.nop();
     }
 
     fn parity(&self, value: u8) -> bool {
@@ -2072,24 +2094,21 @@ impl Cpu {
         let op = self.read8(self.reg.pc + 1);
         ((a >> 7) == (op.wrapping_shl(7))) && ((a.wrapping_shr(7)) != (result.wrapping_shr(7)))
     }
-    pub fn generate_interrupt(&mut self) {
-        self.int.nmi_pending = true;
-        if self.io.port == 0 {
-            self.int.data = self.io.port;
-        }
-    }
+
     pub(crate) fn poll_interrupt(&mut self) {
         // Accepting an NMI
         if self.int.nmi_pending {
             self.int.nmi_pending = false;
             self.int.iff1 = false;
+            self.int.halt = false;
             self.reg.r = self.reg.r.wrapping_add(1);
             self.adv_cycles(11);
-            self.call(0x66);
+            self.rst(0x66);
             return;
         }
         if (self.int.nmi_pending || self.int.irq) || self.int.iff1 {
             self.int_pending = false;
+            self.int.halt = false;
             self.int.iff1 = false;
             self.int.iff2 = false;
             self.reg.r = (self.reg.r & 0x80) | (self.reg.r.wrapping_add(0) as u8 & 0x7f);
@@ -2101,12 +2120,12 @@ impl Cpu {
             // TODO investigate interrupt processing
             match self.int.mode {
                 0 => {
-                    if self.int.data != 0 {
+                    if self.int.vector != 0 || self.io.input {
                         self.adv_cycles(11);
                         if self.debug {
                             println!("Servicing interrupt, mode 0");
                         }
-                        self.decode(self.int.data as u16);
+                        self.decode(self.int.vector as u16);
                     }
                 }
                 1 => {
@@ -2118,20 +2137,19 @@ impl Cpu {
                     self.rst(0x38);
                 }
                 2 => {
-                    // self.reg.i * 256 + busvalue
-                    if self.debug {
-                        println!("Servicing interrupt, mode 2");
+                    // http://z80.info/1653.htm Interrupt MODE 2 details
+                    self.adv_cycles(2);
+                    if self.io.port == 0 {
+                        self.int.vector = self.io.value;
                     }
-                    self.adv_cycles(19);
-                    let addr =
-                        self.read16((self.reg.i).wrapping_shl(8) as u16) | self.int.vector as u16;
-                    let ret: u16 = self.reg.pc.wrapping_add(3);
-                    self.memory[self.reg.sp.wrapping_sub(1)] = (ret >> 8) as u8;
-                    self.memory[self.reg.sp.wrapping_sub(2)] = ret as u8;
-                    self.reg.sp = self.reg.sp.wrapping_sub(2);
+                    let addr = self.read16((self.reg.i.wrapping_shl(8) | self.int.vector) as u16);
+                    self.rst(addr);
 
-                    self.reg.prev_pc = self.reg.pc;
-                    self.reg.pc = addr;
+                    self.int.int = false;
+                    self.int.irq = false;
+                    /*if self.debug {
+                        println!("Servicing interrupt, mode 2: Addr:{:04X}", addr);
+                    }*/
                 }
                 _ => panic!("Unhandled interrupt mode"),
             }

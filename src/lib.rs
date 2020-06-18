@@ -7,7 +7,8 @@ pub mod interconnect;
 pub mod memory;
 pub mod tests;
 
-/*pub fn main() {
+/*
+pub fn main() {
     let args: Vec<String> = std::env::args().collect();
     let mut ctx = Interconnect::new();
     ctx.cpu.memory.load_bin(&args);
