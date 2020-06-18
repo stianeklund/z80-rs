@@ -1,4 +1,4 @@
-# pacman-rs
+# z80-rs
 
 [![Build Status](https://travis-ci.com/stianeklund/z80-rs.svg?branch-master)](https://travis-ci.com/stianeklund/z80-rs)
 

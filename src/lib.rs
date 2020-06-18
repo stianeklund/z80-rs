@@ -1,13 +1,13 @@
 use crate::interconnect::Interconnect;
 
-mod cpu;
-mod formatter;
-mod instruction_info;
-mod interconnect;
-mod memory;
-mod tests;
+pub mod cpu;
+pub mod formatter;
+pub mod instruction_info;
+pub mod interconnect;
+pub mod memory;
+pub mod tests;
 
-fn main() {
+/*pub fn main() {
     let args: Vec<String> = std::env::args().collect();
     let mut ctx = Interconnect::new();
     ctx.cpu.memory.load_bin(&args);
@@ -15,8 +15,5 @@ fn main() {
     loop {
         // std::io::stdin().read_line(&mut String::new()).unwrap();
         ctx.execute_cpu();
-        /*if i.frame_count % 5 == 1 {
-            i.keypad.reset_ports(&mut i.cpu.io);
-        }*/
     }
-}
+}*/
