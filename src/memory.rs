@@ -44,7 +44,7 @@ pub trait MemoryRW {
 }
 
 impl Memory {
-    pub fn new() -> Memory {
+    pub fn default() -> Memory {
         Memory {
             rom: vec![0; 0x1_5000],
             ram: vec![0; 0x1_0000],
@@ -54,7 +54,7 @@ impl Memory {
         self.rom[v]
     }
 
-    pub fn load_bin(&mut self, rom: &Vec<String>) {
+    pub fn load_bin(&mut self, rom: &[String]) {
         let mut buf = Vec::new();
         let mut collection: Vec<&str> = Vec::new();
 
@@ -66,11 +66,7 @@ impl Memory {
             let path = Path::new(f);
             let mut file = File::open(&path).unwrap();
             file.read_to_end(&mut buf).expect("Failed to read binary");
-            // self.rom[..buf.len()].clone_from_slice(&buf[..]);
-
-            for i in 0..buf.len() {
-                self.rom[i] = buf[i];
-            }
+            self.rom[..buf.len()].clone_from_slice(&buf[..]);
             println!("Loaded: {:?} Bytes: {:?}", path, buf.len());
         }
     }

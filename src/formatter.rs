@@ -67,7 +67,8 @@ impl Display for Cpu {
         write!(fmt, "P:{} ", self.flags.pf as u8)?;
         write!(fmt, "C:{} ", self.flags.cf as u8)?;
         write!(fmt, "H:{} ", self.flags.hf as u8)?;
-        write!(fmt, "I:{}", self.int.int as u8)
+        write!(fmt, "I:{} ", self.int.int as u8)?;
+        write!(fmt, "Cycles:{}", self.cycles)
     }
 }
 

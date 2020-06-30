@@ -6,9 +6,9 @@ pub struct Interconnect {
 }
 
 impl Interconnect {
-    pub fn new() -> Self {
+    pub fn default() -> Self {
         Self {
-            cpu: Cpu::new(),
+            cpu: Cpu::default(),
             frame_count: 0,
         }
     }
@@ -29,7 +29,7 @@ impl Interconnect {
         }
 
         self.frame_count += 1;
-        return self.frame_count;
+        self.frame_count
     }
 
     pub fn run_tests(&mut self) {

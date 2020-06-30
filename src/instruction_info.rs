@@ -19,13 +19,13 @@ impl fmt::UpperHex for Instruction {
 impl fmt::Debug for Instruction {
     fn fmt(&self, fmt: &mut Formatter<'_>) -> fmt::Result {
         fmt.align();
-        writeln!(fmt, "")?;
+        writeln!(fmt)?;
         writeln!(fmt, "Instruction :{}", self.name)?;
         writeln!(fmt, "Opcode      :{:04x}", self.opcode)?;
         writeln!(fmt, "Size        :{}", self.bytes)?;
         writeln!(fmt, "Cycles      :{}", self.cycles)?;
         writeln!(fmt, "Alt cycles  :{}", self.alt_cycles)?;
-        writeln!(fmt, "")
+        writeln!(fmt)
     }
 }
 
@@ -62,7 +62,7 @@ impl fmt::UpperHex for Register {
 }
 
 impl Instruction {
-    pub fn new() -> Self {
+    pub fn default() -> Self {
         Self {
             name: String::with_capacity(5),
             bytes: 0,

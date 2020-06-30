@@ -1,5 +1,3 @@
-use std::ops::Add;
-
 use crate::instruction_info::{Instruction, Register, Register::*};
 use crate::memory::{Memory, MemoryRW};
 
@@ -15,6 +13,7 @@ pub struct Cpu {
     pub io: Io,
     pub int: Interrupt,
     pub instruction: Instruction,
+    pub last_instructions: Vec<u16>,
     pub int_pending: bool,
     pub cpm_compat: bool,
     pub memory: Memory,
@@ -120,8 +119,9 @@ impl Flags {
             cf_: false,
         }
     }
+    // Creates a bit field from our CPU flags
     pub(crate) fn get(&self) -> u8 {
-        return if self.sf { 0x80 } else { 0x0 }
+        let result: u8 = if self.sf { 0x80 } else { 0x0 }
             | if self.zf { 0x40 } else { 0x0 }
             | if self.yf { 0x20 } else { 0x0 }
             | if self.hf { 0x10 } else { 0x0 }
@@ -129,19 +129,21 @@ impl Flags {
             | if self.pf { 0x04 } else { 0x0 }
             | if self.nf { 0x02 } else { 0x0 }
             | if self.cf { 0x01 } else { 0x0 };
+        result
     }
     pub fn set(&mut self, value: u8) {
-        self.sf = value & 0x80 != 0;
-        self.zf = value & 0x40 != 0;
-        self.yf = value & 0x20 != 0;
-        self.hf = value & 0x10 != 0;
-        self.xf = value & 0x08 != 0;
-        self.pf = value & 0x04 != 0;
-        self.nf = value & 0x02 != 0;
-        self.cf = value & 0x01 != 0;
+        self.sf = (value & 0x80) != 0;
+        self.zf = (value & 0x40) != 0;
+        self.yf = (value & 0x20) != 0;
+        self.hf = (value & 0x10) != 0;
+        self.xf = (value & 0x08) != 0;
+        self.pf = (value & 0x04) != 0;
+        self.nf = (value & 0x02) != 0;
+        self.cf = (value & 0x01) != 0;
     }
+
     pub(crate) fn get_shadow(&self) -> u8 {
-        return if self.sf_ { 0x80 } else { 0x0 }
+        let shadow: u8 = if self.sf_ { 0x80 } else { 0x0 }
             | if self.zf_ { 0x40 } else { 0x0 }
             | if self.yf_ { 0x20 } else { 0x0 }
             | if self.hf_ { 0x10 } else { 0x0 }
@@ -149,17 +151,18 @@ impl Flags {
             | if self.pf_ { 0x04 } else { 0x0 }
             | if self.nf_ { 0x02 } else { 0x0 }
             | if self.cf_ { 0x01 } else { 0x0 };
+        shadow
     }
 
     pub fn set_shadow(&mut self, value: u8) {
-        self.sf_ = value & 0x80 != 0;
-        self.zf_ = value & 0x40 != 0;
-        self.yf_ = value & 0x20 != 0;
-        self.hf_ = value & 0x10 != 0;
-        self.xf_ = value & 0x08 != 0;
-        self.pf_ = value & 0x04 != 0;
-        self.nf_ = value & 0x02 != 0;
-        self.cf_ = value & 0x01 != 0;
+        self.sf_ = (value & 0x80) != 0;
+        self.zf_ = (value & 0x40) != 0;
+        self.yf_ = (value & 0x20) != 0;
+        self.hf_ = (value & 0x10) != 0;
+        self.xf_ = (value & 0x08) != 0;
+        self.pf_ = (value & 0x04) != 0;
+        self.nf_ = (value & 0x02) != 0;
+        self.cf_ = (value & 0x01) != 0;
     }
 
     fn swap(&mut self) {
@@ -172,17 +175,15 @@ impl Flags {
 impl MemoryRW for Cpu {
     fn read8(&self, addr: u16) -> u8 {
         if self.cpm_compat {
-            return self.memory[addr];
+            self.memory[addr]
+        } else if addr < 0x4000 {
+            self.memory.rom[addr as usize]
+        } else if addr == 0x5000 {
+            self.int.int as u8
+        } else if addr < 0x5000 {
+            self.memory.ram[addr as usize - 0x4000]
         } else {
-            if addr < 0x4000 {
-                self.memory.rom[addr as usize]
-            } else if addr == 0x5000 {
-                return self.int.int as u8;
-            } else if addr < 0x5000 {
-                self.memory.ram[addr as usize - 0x4000]
-            } else {
-                self.memory.rom[addr as usize]
-            }
+            self.memory.rom[addr as usize]
         }
     }
     fn read16(&self, addr: u16) -> u16 {
@@ -195,28 +196,26 @@ impl MemoryRW for Cpu {
     }
     fn write8(&mut self, addr: u16, byte: u8) {
         if self.cpm_compat {
-            return self.memory[addr] = byte;
+            self.memory[addr] = byte
+        } else if addr < 0x4000 {
+            self.memory.ram[addr as usize] = byte;
+        // eprintln!("Attempting write to ROM: {:04x}", addr);
+        // eprintln!("Called by:{:#?}", self.instruction);
+        // panic!("");
+        } else if addr < 0x5000 {
+            self.memory.ram[addr as usize - 0x4000] = byte;
+        } else if addr == 0x5000 {
+            self.int_pending = true;
+        // self.int.irq = true;
         } else {
-            if addr < 0x4000 {
-                self.memory.ram[addr as usize] = byte;
-                // eprintln!("Attempting write to ROM: {:04x}", addr);
-                // eprintln!("Called by:{:#?}", self.instruction);
-                // panic!("");
-            } else if addr < 0x5000 {
-                self.memory.ram[addr as usize - 0x4000] = byte;
-            } else if addr == 0x5000 {
-                self.int_pending = true;
-            // self.int.irq = true;
-            } else {
-                self.memory.ram[addr as usize] = byte;
-            }
+            self.memory.ram[addr as usize] = byte;
         }
     }
 }
 
 impl Cpu {
-    pub fn new() -> Cpu {
-        Cpu {
+    pub fn default() -> Self {
+        Self {
             opcode: 0,
             next_opcode: 0,
             reg: Registers::default(),
@@ -228,9 +227,10 @@ impl Cpu {
             io: Io::default(),
             int: Interrupt::default(),
             int_pending: false,
-            instruction: Instruction::new(),
-            memory: Memory::new(),
+            instruction: Instruction::default(),
+            memory: Memory::default(),
             cpm_compat: false,
+            last_instructions: vec![0; 20],
         }
     }
 
@@ -248,10 +248,10 @@ impl Cpu {
             R => self.reg.r,
             IX => self.reg.ix as u8,
             IXH => (self.reg.ix >> 8) as u8,
-            IXL => ((self.reg.ix as u8) & 0xff),
+            IXL => self.reg.ix as u8,
             IY => self.reg.iy as u8,
             IYH => (self.reg.iy >> 8) as u8,
-            IYL => ((self.reg.iy as u8) & 0xff),
+            IYL => self.reg.iy as u8,
             // TODO Potential value loss here
             BC => self.get_pair(BC) as u8,
             DE => self.get_pair(DE) as u8,
@@ -315,7 +315,7 @@ impl Cpu {
         }
     }
     pub fn get_pair(&self, reg: Register) -> u16 {
-        return match reg {
+        match reg {
             BC => (self.reg.b as u16) << 8 | (self.reg.c as u16),
             DE => (self.reg.d as u16) << 8 | (self.reg.e as u16),
             HL => (self.reg.h as u16) << 8 | (self.reg.l as u16),
@@ -324,7 +324,7 @@ impl Cpu {
             SP => self.reg.sp,
             AF => (self.reg.a as u16) << 8 | (self.flags.get() as u16),
             _ => unimplemented!("{:?}", reg),
-        };
+        }
     }
     fn adv_pc(&mut self, t: u16) {
         self.reg.prev_pc = self.reg.pc;
@@ -350,14 +350,14 @@ impl Cpu {
             .wrapping_add(value as u16)
             .wrapping_add(self.flags.cf as u16);
 
-        self.flags.sf = result & 0x80 != 0;
-        self.flags.zf = result & 0xFF == 0;
+        self.flags.sf = (result & 0x80) != 0;
+        self.flags.zf = (result & 0xFF) == 0;
         self.flags.hf = self.hf_add(self.reg.a, value);
         self.flags.pf = self.overflow(self.reg.a, result as u8);
         self.flags.nf = false;
-        self.flags.yf = result & 0x20 != 0;
-        self.flags.xf = result & 0x08 != 0;
-        self.flags.cf = result & 0x0100 != 0;
+        self.flags.yf = (result & 0x20) != 0;
+        self.flags.xf = (result & 0x08) != 0;
+        self.flags.cf = (result & 0x0100) != 0;
 
         self.reg.a = result as u8;
 
@@ -382,14 +382,14 @@ impl Cpu {
         self.reg.h = (result >> 8) as u8;
         self.reg.l = result as u8;
 
-        self.flags.sf = result & 0x80 != 0;
-        self.flags.zf = result & 0xFF == 0;
+        self.flags.sf = (result & 0x80) != 0;
+        self.flags.zf = (result & 0xFF) == 0;
         self.flags.pf = self.overflow(result.wrapping_sub(1) as u8, result as u8);
         self.flags.cf = ((result >> 8) & 0x0100) != 0;
         self.flags.hf = self.hf_add(self.reg.a, (result >> 8) as u8);
         self.flags.nf = false;
-        self.flags.yf = (result >> 8) & 0x20 != 0;
-        self.flags.xf = (result >> 8) & 0x08 != 0;
+        self.flags.yf = ((result >> 8) & 0x20) != 0;
+        self.flags.xf = ((result >> 8) & 0x08) != 0;
 
         self.adv_cycles(15);
         self.adv_pc(2);
@@ -445,14 +445,14 @@ impl Cpu {
 
         let result = (self.reg.a as u16).wrapping_add(value as u16);
 
-        self.flags.sf = result & 0x80 != 0;
-        self.flags.zf = result & 0xFF == 0;
+        self.flags.sf = (result & 0x80) != 0;
+        self.flags.zf = (result & 0xFF) == 0;
         self.flags.hf = self.hf_add(self.reg.a, value);
         self.flags.pf = self.overflow(self.reg.a, result as u8);
         self.flags.nf = false;
-        self.flags.yf = result & 0x20 != 0;
-        self.flags.xf = result & 0x08 != 0;
-        self.flags.cf = result & 0x0100 != 0;
+        self.flags.yf = (result & 0x20) != 0;
+        self.flags.xf = (result & 0x08) != 0;
+        self.flags.cf = (result & 0x0100) != 0;
 
         self.reg.a = result as u8;
 
@@ -467,14 +467,14 @@ impl Cpu {
         let result = (value).wrapping_add(self.reg.a as u16);
 
         // Set CPU flags with new accumulator values
-        self.flags.sf = result & 0x80 != 0;
-        self.flags.zf = result & 0xFF == 0;
+        self.flags.sf = (result & 0x80) != 0;
+        self.flags.zf = (result & 0xFF) == 0;
         self.flags.pf = self.overflow(self.reg.a, result as u8);
-        self.flags.yf = result & 0x20 != 0;
-        self.flags.xf = result & 0x08 != 0;
+        self.flags.yf = (result & 0x20) != 0;
+        self.flags.xf = (result & 0x08) != 0;
         self.flags.nf = false;
         self.flags.hf = self.hf_add(self.reg.a, value as u8);
-        self.flags.cf = result & 0x0100 != 0;
+        self.flags.cf = (result & 0x0100) != 0;
 
         self.reg.a = result as u8;
 
@@ -492,10 +492,10 @@ impl Cpu {
         // And value with accumulator
         let result = self.reg.a & value;
 
-        self.flags.sf = result & 0x80 != 0;
-        self.flags.zf = result & 0xFF == 0;
-        self.flags.yf = result & 0x20 != 0;
-        self.flags.xf = result & 0x08 != 0;
+        self.flags.sf = (result & 0x80) != 0;
+        self.flags.zf = (result & 0xFF) == 0;
+        self.flags.yf = (result & 0x20) != 0;
+        self.flags.xf = (result & 0x08) != 0;
         self.flags.nf = false;
         self.flags.hf = true;
         self.flags.pf = self.parity(result as u8);
@@ -512,10 +512,10 @@ impl Cpu {
         let value = self.read8(self.reg.pc + 1);
         let result = self.reg.a as u16 & value as u16;
 
-        self.flags.sf = result & 0x80 != 0;
-        self.flags.zf = result & 0xFF == 0;
-        self.flags.yf = result & 0x20 != 0;
-        self.flags.xf = result & 0x08 != 0;
+        self.flags.sf = (result & 0x80) != 0;
+        self.flags.zf = (result & 0xFF) == 0;
+        self.flags.yf = (result & 0x20) != 0;
+        self.flags.xf = (result & 0x08) != 0;
         self.flags.nf = false;
         self.flags.hf = true;
         self.flags.pf = self.parity(result as u8);
@@ -534,10 +534,10 @@ impl Cpu {
         }
         let result = self.read_reg(reg) & (1 << bit);
 
-        self.flags.sf = result & 0x80 != 0;
-        self.flags.zf = result & 0xFF == 0;
-        self.flags.yf = result & 0x20 != 0;
-        self.flags.xf = result & 0x08 != 0;
+        self.flags.sf = (result & 0x80) != 0;
+        self.flags.zf = (result & 0xFF) == 0;
+        self.flags.yf = (result & 0x20) != 0;
+        self.flags.xf = (result & 0x08) != 0;
         self.flags.nf = false;
         self.flags.hf = true;
         self.flags.pf = self.flags.zf; // TODO: Double check this
@@ -681,7 +681,7 @@ impl Cpu {
             _ => {
                 // println!("CALL to address:{:04X}", addr);
                 self.reg.pc = addr;
-            },
+            }
         };
 
         self.adv_cycles(17);
@@ -701,8 +701,8 @@ impl Cpu {
         self.reg.a ^= 0xFF;
         self.flags.hf = true;
         self.flags.nf = true;
-        self.flags.yf = self.reg.a & 0x20 != 0;
-        self.flags.xf = self.reg.a & 0x08 != 0;
+        self.flags.yf = (self.reg.a & 0x20) != 0;
+        self.flags.xf = (self.reg.a & 0x08) != 0;
         self.adv_cycles(4);
         self.adv_pc(1);
     }
@@ -710,8 +710,8 @@ impl Cpu {
     fn ccf(&mut self) {
         self.flags.hf = self.flags.cf;
         self.flags.cf = !self.flags.cf;
-        self.flags.yf = self.reg.a & 0x20 != 0;
-        self.flags.xf = self.reg.a & 0x08 != 0;
+        self.flags.yf = (self.reg.a & 0x20) != 0;
+        self.flags.xf = (self.reg.a & 0x08) != 0;
         self.flags.nf = false;
         self.adv_cycles(4);
         self.adv_pc(1);
@@ -727,13 +727,13 @@ impl Cpu {
         let result = (self.reg.a as u16).wrapping_sub(value as u16);
         let overflow = (self.reg.a as i8).overflowing_sub(value as i8).1;
 
-        self.flags.sf = result & 0x80 != 0;
-        self.flags.zf = result & 0xFF == 0;
+        self.flags.sf = (result & 0x80) != 0;
+        self.flags.zf = (result & 0xFF) == 0;
         self.flags.hf = self.hf_sub(self.reg.a, value as u8);
         self.flags.nf = true;
         // The XF & YF flags use the non compared value
-        self.flags.yf = value & 0x20 != 0;
-        self.flags.xf = value & 0x08 != 0;
+        self.flags.yf = (value & 0x20) != 0;
+        self.flags.xf = (value & 0x08) != 0;
         self.flags.pf = overflow;
 
         /*if overflow
@@ -742,7 +742,7 @@ impl Cpu {
         {
             println!("Overflow differs");
         }*/
-        self.flags.cf = result & 0x0100 != 0;
+        self.flags.cf = (result & 0x0100) != 0;
 
         self.adv_cycles(4);
         self.adv_pc(1);
@@ -754,14 +754,14 @@ impl Cpu {
         let result = (self.reg.a as i16).wrapping_sub(value as i16);
         let overflow = (self.reg.a as i8).overflowing_sub(value as i8).1;
 
-        self.flags.sf = result & 0x80 != 0;
-        self.flags.zf = result & 0xFF == 0;
-        self.flags.yf = value & 0x20 != 0;
+        self.flags.sf = (result & 0x80) != 0;
+        self.flags.zf = (result & 0xFF) == 0;
+        self.flags.yf = (value & 0x20) != 0;
         self.flags.hf = self.hf_sub(self.reg.a, value as u8);
-        self.flags.xf = value & 0x08 != 0;
+        self.flags.xf = (value & 0x08) != 0;
         self.flags.pf = overflow;
         self.flags.nf = true;
-        self.flags.cf = result & 0x0100 != 0;
+        self.flags.cf = (result & 0x0100) != 0;
         // self.flags.pf = self.carry_sub(7, a, value, false) != self.carry_sub(8, a, value, false);
 
         self.adv_cycles(7);
@@ -779,14 +779,14 @@ impl Cpu {
         let result = (self.reg.a as u16).wrapping_sub(value as u16);
         let overflow = (self.reg.a as i8).overflowing_sub(value as i8).1;
         self.flags.nf = true;
-        self.flags.sf = result & 0x80 != 0;
-        self.flags.zf = result & 0xFF == 0;
+        self.flags.sf = (result & 0x80) != 0;
+        self.flags.zf = (result & 0xFF) == 0;
         self.flags.hf = self.hf_sub(self.reg.a, value);
         // self.flags.pf = self.overflow(value, result as u8);
         self.flags.pf = overflow;
-        self.flags.cf = result & 0x0100 != 0;
-        self.flags.yf = value & 0x20 != 0;
-        self.flags.xf = value & 0x08 != 0;
+        self.flags.cf = (result & 0x0100) != 0;
+        self.flags.yf = (value & 0x20) != 0;
+        self.flags.xf = (value & 0x08) != 0;
     }
 
     pub(crate) fn add_hl(&mut self, reg: Register) {
@@ -803,8 +803,8 @@ impl Cpu {
         self.flags.hf = self.carry(12, hl, add as u16);
 
         self.flags.nf = false;
-        self.flags.yf = (result >> 8) & 0x20 != 0;
-        self.flags.xf = (result >> 8) & 0x08 != 0;
+        self.flags.yf = ((result >> 8) & 0x20) != 0;
+        self.flags.xf = ((result >> 8) & 0x08) != 0;
         self.adv_cycles(11);
         self.adv_pc(1);
     }
@@ -828,13 +828,13 @@ impl Cpu {
 
         let overflow = (result as i8).wrapping_add(1).overflowing_sub(1).1;
 
-        self.flags.sf = result & 0x80 != 0;
-        self.flags.zf = result & 0xFF == 0;
+        self.flags.sf = (result & 0x80) != 0;
+        self.flags.zf = (result & 0xFF) == 0;
         self.flags.hf = self.hf_sub(result.wrapping_add(1), 1);
         self.flags.pf = overflow;
         self.flags.nf = true;
-        self.flags.yf = result & 0x20 != 0;
-        self.flags.xf = result & 0x08 != 0;
+        self.flags.yf = (result & 0x20) != 0;
+        self.flags.xf = (result & 0x08) != 0;
 
         self.adv_cycles(4);
         self.adv_pc(1);
@@ -877,11 +877,11 @@ impl Cpu {
         }
         let result = (self.reg.a as u16).wrapping_add(offset as u16);
 
-        self.flags.sf = result & 0x80 != 0;
-        self.flags.zf = result & 0xFF == 0;
+        self.flags.sf = (result & 0x80) != 0;
+        self.flags.zf = (result & 0xFF) == 0;
         self.flags.pf = self.parity(result as u8);
-        self.flags.yf = self.reg.a & 0x20 != 0;
-        self.flags.xf = self.reg.a & 0x08 != 0;
+        self.flags.yf = (self.reg.a & 0x20) != 0;
+        self.flags.xf = (self.reg.a & 0x08) != 0;
         self.reg.a = result as u8;
 
         self.adv_cycles(4);
@@ -916,8 +916,8 @@ impl Cpu {
         self.reg.a = (self.reg.a << 1) | ((self.flags.cf as u8) << 7);
         self.flags.nf = false;
         self.flags.hf = false;
-        self.flags.yf = self.reg.a & 0x20 != 0;
-        self.flags.xf = self.reg.a & 0x08 != 0;
+        self.flags.yf = (self.reg.a & 0x20) != 0;
+        self.flags.xf = (self.reg.a & 0x08) != 0;
         self.flags.cf = carry;
 
         self.adv_cycles(4);
@@ -932,9 +932,9 @@ impl Cpu {
 
         self.flags.nf = false;
         self.flags.hf = false;
-        self.flags.yf = value & 0x20 != 0;
-        self.flags.xf = value & 0x08 != 0;
-        self.flags.cf = value & 0x80 != 0;
+        self.flags.yf = (value & 0x20) != 0;
+        self.flags.xf = (value & 0x08) != 0;
+        self.flags.cf = (value & 0x80) != 0;
         self.parity(value);
         self.adv_pc(2);
         self.adv_cycles(8);
@@ -946,9 +946,9 @@ impl Cpu {
 
         self.flags.nf = false;
         self.flags.hf = false;
-        self.flags.yf = value & 0x20 != 0;
-        self.flags.xf = value & 0x08 != 0;
-        self.flags.cf = value & 0x80 != 0;
+        self.flags.yf = (value & 0x20) != 0;
+        self.flags.xf = (value & 0x08) != 0;
+        self.flags.cf = (value & 0x80) != 0;
         self.parity(value);
         self.adv_pc(2);
         self.adv_cycles(8);
@@ -958,8 +958,8 @@ impl Cpu {
         let carry = (self.reg.a & 1) != 0;
         self.reg.a = (self.reg.a >> 1) | ((self.flags.cf as u8) << 7);
         self.flags.cf = carry;
-        self.flags.yf = self.reg.a & 0x20 != 0;
-        self.flags.xf = self.reg.a & 0x08 != 0;
+        self.flags.yf = (self.reg.a & 0x20) != 0;
+        self.flags.xf = (self.reg.a & 0x08) != 0;
         self.flags.nf = false;
         self.flags.hf = false;
         self.adv_cycles(4);
@@ -970,8 +970,8 @@ impl Cpu {
     fn rlca(&mut self) {
         self.flags.cf = (self.reg.a >> 7) != 0;
         self.reg.a = (self.reg.a << 1) | self.flags.cf as u8;
-        self.flags.yf = self.reg.a & 0x20 != 0;
-        self.flags.xf = self.reg.a & 0x08 != 0;
+        self.flags.yf = (self.reg.a & 0x20) != 0;
+        self.flags.xf = (self.reg.a & 0x08) != 0;
         self.flags.nf = false;
         self.flags.hf = false;
         self.adv_cycles(4);
@@ -981,8 +981,8 @@ impl Cpu {
     fn rrca(&mut self) {
         self.flags.cf = (self.reg.a & 1) != 0;
         self.reg.a = (self.reg.a >> 1) | ((self.flags.cf as u8) << 7);
-        self.flags.yf = self.reg.a & 0x20 != 0;
-        self.flags.xf = self.reg.a & 0x08 != 0;
+        self.flags.yf = (self.reg.a & 0x20) != 0;
+        self.flags.xf = (self.reg.a & 0x08) != 0;
         self.flags.nf = false;
         self.flags.hf = false;
         self.adv_cycles(4);
@@ -1016,7 +1016,7 @@ impl Cpu {
         self.adv_pc(2);
     }
 
-    // LDA Load Accumulator direct
+    // LD A, (**)
     fn lda_im(&mut self) {
         let addr = self.read16(self.reg.pc + 1);
         self.reg.a = self.read8(addr);
@@ -1092,13 +1092,13 @@ impl Cpu {
         };
         let overflow = (result as i8).wrapping_sub(1).overflowing_add(1).1;
 
-        self.flags.sf = result & 0x80 != 0;
-        self.flags.zf = result & 0xFF == 0;
+        self.flags.sf = (result & 0x80) != 0;
+        self.flags.zf = (result & 0xFF) == 0;
         self.flags.hf = self.hf_add(result.wrapping_sub(1), 1);
         self.flags.pf = overflow;
         self.flags.nf = false;
-        self.flags.yf = result & 0x20 != 0;
-        self.flags.xf = result & 0x08 != 0;
+        self.flags.yf = (result & 0x20) != 0;
+        self.flags.xf = (result & 0x08) != 0;
         self.adv_cycles(4);
         self.adv_pc(1);
     }
@@ -1146,13 +1146,13 @@ impl Cpu {
             .wrapping_sub(value as u16)
             .wrapping_sub(self.flags.cf as u16);
 
-        self.flags.sf = result & 0x80 != 0;
-        self.flags.zf = result & 0xFF == 0;
+        self.flags.sf = (result & 0x80) != 0;
+        self.flags.zf = (result & 0xFF) == 0;
         self.flags.hf = self.hf_sub(self.reg.a, value as u8);
         self.flags.pf = self.overflow(value, result as u8);
-        self.flags.yf = result & 0x20 != 0;
-        self.flags.xf = result & 0x08 != 0;
-        self.flags.cf = result & 0x0100 != 0;
+        self.flags.yf = (result & 0x20) != 0;
+        self.flags.xf = (result & 0x08) != 0;
+        self.flags.cf = (result & 0x0100) != 0;
         self.flags.nf = true;
         self.reg.a = result as u8;
 
@@ -1167,14 +1167,14 @@ impl Cpu {
         let result = (self.reg.a as u16).wrapping_sub(value as u16);
         let overflow = (self.reg.a as i8).overflowing_sub(value as i8).1;
 
-        self.flags.sf = result & 0x80 != 0;
-        self.flags.zf = result & 0xFF == 0;
+        self.flags.sf = (result & 0x80) != 0;
+        self.flags.zf = (result & 0xFF) == 0;
         self.flags.hf = self.hf_sub(self.reg.a, value as u8);
         self.flags.pf = overflow;
-        self.flags.yf = result & 0x20 != 0;
-        self.flags.xf = result & 0x08 != 0;
+        self.flags.yf = (result & 0x20) != 0;
+        self.flags.xf = (result & 0x08) != 0;
         self.flags.nf = true;
-        self.flags.cf = result & 0x0100 != 0;
+        self.flags.cf = (result & 0x0100) != 0;
         self.reg.a = result as u8;
 
         self.adv_cycles(7);
@@ -1197,14 +1197,14 @@ impl Cpu {
         let result = (self.reg.a as u16).wrapping_sub(value as u16);
         let overflow = (self.reg.a as i8).overflowing_sub(value as i8).1;
 
-        self.flags.sf = result & 0x80 != 0;
-        self.flags.zf = result & 0xFF == 0;
+        self.flags.sf = (result & 0x80) != 0;
+        self.flags.zf = (result & 0xFF) == 0;
         self.flags.hf = self.hf_sub(self.reg.a, value);
         self.flags.pf = overflow;
         self.flags.nf = true;
-        self.flags.yf = result & 0x20 != 0;
-        self.flags.xf = result & 0x08 != 0;
-        self.flags.cf = result & 0x0100 != 0;
+        self.flags.yf = (result & 0x20) != 0;
+        self.flags.xf = (result & 0x08) != 0;
+        self.flags.cf = (result & 0x0100) != 0;
         self.reg.a = result as u8;
 
         self.adv_cycles(4);
@@ -1217,15 +1217,15 @@ impl Cpu {
         let result = (self.reg.a as u16).wrapping_sub(value as u16);
         let overflow = (self.reg.a as i8).overflowing_sub(value as i8).1;
 
-        self.flags.sf = result & 0x80 != 0;
-        self.flags.zf = result & 0xFF == 0;
+        self.flags.sf = (result & 0x80) != 0;
+        self.flags.zf = (result & 0xFF) == 0;
         self.flags.hf = self.hf_sub(self.reg.a, value as u8);
         self.flags.pf = self.overflow(value, result as u8);
         self.flags.pf = overflow;
         self.flags.nf = true;
-        self.flags.yf = result & 0x20 != 0;
-        self.flags.xf = result & 0x08 != 0;
-        self.flags.cf = result & 0x0100 != 0;
+        self.flags.yf = (result & 0x20) != 0;
+        self.flags.xf = (result & 0x08) != 0;
+        self.flags.cf = (result & 0x0100) != 0;
         self.reg.a = result as u8;
 
         self.adv_cycles(7);
@@ -1237,8 +1237,8 @@ impl Cpu {
         self.flags.cf = true;
         self.flags.nf = false;
         self.flags.hf = false;
-        self.flags.yf = self.reg.a & 0x20 != 0;
-        self.flags.xf = self.reg.a & 0x08 != 0;
+        self.flags.yf = (self.reg.a & 0x20) != 0;
+        self.flags.xf = (self.reg.a & 0x08) != 0;
         self.adv_cycles(4);
         self.adv_pc(1);
     }
@@ -1254,12 +1254,12 @@ impl Cpu {
 
         let result = self.reg.a as u16 ^ value as u16;
 
-        self.flags.sf = result & 0x80 != 0;
-        self.flags.zf = result & 0xFF == 0;
+        self.flags.sf = (result & 0x80) != 0;
+        self.flags.zf = (result & 0xFF) == 0;
         self.flags.hf = false;
         self.flags.nf = false;
-        self.flags.yf = result & 0x20 != 0;
-        self.flags.xf = result & 0x08 != 0;
+        self.flags.yf = (result & 0x20) != 0;
+        self.flags.xf = (result & 0x08) != 0;
         self.flags.cf = false;
         self.flags.pf = self.parity(result as u8);
         self.reg.a = result as u8;
@@ -1273,12 +1273,12 @@ impl Cpu {
         let imm = self.read8(self.reg.pc + 1);
         let result = self.reg.a ^ imm as u8;
 
-        self.flags.sf = result & 0x80 != 0;
-        self.flags.zf = result & 0xFF == 0;
+        self.flags.sf = (result & 0x80) != 0;
+        self.flags.zf = (result & 0xFF) == 0;
         self.flags.hf = false;
         self.flags.nf = false;
-        self.flags.yf = result & 0x20 != 0;
-        self.flags.xf = result & 0x08 != 0;
+        self.flags.yf = (result & 0x20) != 0;
+        self.flags.xf = (result & 0x08) != 0;
         self.flags.pf = self.parity(result);
         self.flags.cf = false;
         self.reg.a = result;
@@ -1401,12 +1401,12 @@ impl Cpu {
 
         let result = self.reg.a as u16 | value as u16;
 
-        self.flags.sf = result & 0x80 != 0;
-        self.flags.zf = result & 0xFF == 0;
+        self.flags.sf = (result & 0x80) != 0;
+        self.flags.zf = (result & 0xFF) == 0;
         self.flags.hf = false;
         self.flags.nf = false;
-        self.flags.yf = result & 0x20 != 0;
-        self.flags.xf = result & 0x08 != 0;
+        self.flags.yf = (result & 0x20) != 0;
+        self.flags.xf = (result & 0x08) != 0;
         self.flags.pf = self.parity(result as u8);
         self.flags.cf = false;
         self.reg.a = result as u8;
@@ -1419,12 +1419,12 @@ impl Cpu {
     fn ori(&mut self) {
         let result = self.reg.a as u16 | self.read8(self.reg.pc + 1) as u16;
 
-        self.flags.sf = result & 0x80 != 0;
-        self.flags.zf = result & 0xFF == 0;
+        self.flags.sf = (result & 0x80) != 0;
+        self.flags.zf = (result & 0xFF) == 0;
         self.flags.hf = false;
         self.flags.nf = false;
-        self.flags.yf = result & 0x20 != 0;
-        self.flags.xf = result & 0x08 != 0;
+        self.flags.yf = (result & 0x20) != 0;
+        self.flags.xf = (result & 0x08) != 0;
         self.flags.pf = self.parity(result as u8);
         self.flags.cf = false;
         self.reg.a = result as u8;
@@ -1451,7 +1451,7 @@ impl Cpu {
                     self.adv_cycles(3);
                 } else if (src == R) | (src == I) {
                     self.flags.sf = (self.reg.a & 0x80) != 0;
-                    self.flags.zf = (self.reg.a & 0xFF) == 0;
+                    self.flags.zf = self.reg.a == 0;
                     // TODO PF interrupt interrupt handling
                     self.flags.pf = self.int.iff2;
                     self.flags.hf = false;
@@ -1523,6 +1523,7 @@ impl Cpu {
     pub(crate) fn fetch(&mut self) {
         self.opcode = self.read8(self.reg.pc) as u16;
         self.next_opcode = self.read8(self.reg.pc.wrapping_add(1)) as u16;
+        self.last_instructions.push(self.opcode);
         self.instruction = Instruction::decode(self.opcode, self.next_opcode)
             .expect(format!("Unknown opcode:{:04X}", self.opcode).as_str());
 
@@ -1535,9 +1536,9 @@ impl Cpu {
 
     pub fn decode(&mut self, opcode: u16) {
         use self::Register::*;
-        // self.debug = true;
         if self.debug {
-            println!("{}", self);
+            println!("{:#?}", self);
+            // println!("{}", self);
         }
 
         self.reg.r = (self.reg.r & 0x80) | (self.reg.r.wrapping_add(1)) & 0x7f;
@@ -1964,7 +1965,7 @@ impl Cpu {
                 self.reg.r = (self.reg.r & 0x80) | (self.reg.r.wrapping_add(1)) & 0x7f;
                 match self.opcode {
                     0x09 => self.add_ex(IY, BC),
-                    0x6E => self.ld_dd(L, IY),// ld l,(iy+*)
+                    0x6E => self.ld_dd(L, IY), // ld l,(iy+*)
                     0x19 => self.add_ex(IY, DE),
                     0x21 => {
                         self.reg.iy = self.read16(self.reg.pc + 2);
@@ -2060,12 +2061,12 @@ impl Cpu {
     fn carry(&self, bit_no: u8, a: u16, b: u16) -> bool {
         let result = a.wrapping_add(b);
         let carry = result ^ a ^ b;
-        return bool::from(carry & (1 << bit_no) != 0);
+        carry & (1 << bit_no) != 0
     }
     fn carry_sub(&self, bit_no: u8, a: u16, b: u16) -> bool {
         let result = a.wrapping_sub(b);
         let carry = result ^ a ^ b;
-        return bool::from(carry & (1 << bit_no) != 0);
+        carry & (1 << bit_no) != 0
     }
 
     fn hf_add(&self, a: u8, b: u8) -> bool {
@@ -2074,7 +2075,8 @@ impl Cpu {
     }
     fn hf_add_w(&self, a: u16, b: u16) -> bool {
         // Check carry of bit 12
-        (((a & 0x0F00) + (b & 0x0F00) & 0x1000) & (1 << 12)) != 0
+        // (((a & 0x0F00) + (b & 0x0F00) & 0x1000) & (1 << 12)) != 0
+        ((a & 0x0F00) + (b & 0x0F00)) & 0x1000 & (1 << 12) != 0
     }
     fn hf_sub_w(a: u16, b: u16) -> bool {
         // ((((a as i16 & 0x0F00) + (b as i16 & 0x0F00)) & 0x1000) & (1 << 12)) != 0
@@ -2156,14 +2158,6 @@ impl Cpu {
                 }
                 _ => panic!("Unhandled interrupt mode"),
             }
-        }
-    }
-
-    pub fn try_reset_cycles(&mut self) {
-        if self.cycles < 25_600 {
-            return;
-        } else {
-            self.cycles = 0;
         }
     }
 }

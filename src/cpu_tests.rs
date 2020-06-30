@@ -3,12 +3,11 @@ mod tests {
     use crate::instruction_info::Register;
     use crate::instruction_info::Register::{BC, DE, HL};
     use crate::interconnect::Interconnect;
-    use crate::memory::MemoryRW;
 
     #[test]
     fn test_hf_flag() {
         // Make sure HF flag gets set on accumulator value wrap from FFh to 00h.
-        let mut i = Interconnect::new();
+        let mut i = Interconnect::default();
         i.cpu.reg.a = 0xff;
         i.cpu.inc(Register::A);
         assert_eq!(i.cpu.flags.hf, true);
@@ -17,7 +16,7 @@ mod tests {
     #[test]
     fn test_hf_high_byte() {
         // The half carry flag should be set once we increment HL from 00FFh to 0000h
-        let mut i = Interconnect::new();
+        let mut i = Interconnect::default();
         i.cpu.write_pair_direct(BC, 1); // Set BC to 1 (we will increment HL by 1)
         i.cpu.reg.a = 0xff;
         i.cpu.write_pair_direct(HL, 0x00FF);
@@ -28,7 +27,7 @@ mod tests {
 
     #[test]
     fn fast_z80() {
-        // Assert the tests executed CPU cycle amount vs real hardware cycles
+        // Assert the tests executed CPU cycle amount vs real hardware cycle
         assert_eq!(exec_test("tests/prelim.com"), 8721);
         assert_eq!(exec_test("tests/8080PRE.COM"), 7772);
         assert_eq!(exec_test("tests/CPUTEST.COM"), 240551424);
@@ -52,7 +51,7 @@ mod tests {
     }
 
     fn exec_test(bin: &str) -> usize {
-        let mut i = Interconnect::new();
+        let mut i = Interconnect::default();
         i.cpu.reset();
         i.cpu.memory.load_tests(bin);
 
