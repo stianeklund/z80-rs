@@ -322,8 +322,16 @@ impl Cpu {
             IX => self.reg.ix,
             IY => self.reg.iy,
             SP => self.reg.sp,
-            AF => (self.reg.a as u16) << 8 | (self.flags.get() as u16),
-            _ => unimplemented!("{:?}", reg),
+            AF => ((self.reg.a as u16) << 8 | (self.flags.get() as u16)),
+            _ => {
+                println!("Called from:{:#?}", self.instruction);
+                for i in self.last_instructions.iter() {
+                    Instruction::decode(*i, i + 1);
+
+                }
+                println!("Previous instructions:{:#?}", self.last_instructions.iter().enumerate());
+                panic!();
+            }
         }
     }
     fn adv_pc(&mut self, t: u16) {
@@ -344,7 +352,7 @@ impl Cpu {
             self.adv_cycles(3);
             self.memory[self.get_pair(Register::HL)]
         } else {
-            unimplemented!();
+            unimplemented!("{:#?}, Reg:{:#?}", self.instruction, reg);
         };
         let result: u16 = (self.reg.a as u16)
             .wrapping_add(value as u16)
@@ -406,14 +414,14 @@ impl Cpu {
             .wrapping_add(reg_a as u16)
             .wrapping_add(carry as u16);
 
-        self.flags.sf = result & 0x80 != 0;
-        self.flags.zf = result & 0xFF == 0;
+        self.flags.sf = (result & 0x80) != 0;
+        self.flags.zf = (result & 0xFF) == 0;
         self.flags.hf = self.hf_add(reg_a, value as u8);
-        self.flags.yf = result & 0x20 != 0;
-        self.flags.xf = result & 0x08 != 0;
+        self.flags.yf = (result & 0x20) != 0;
+        self.flags.xf = (result & 0x08) != 0;
         self.flags.nf = false;
         self.flags.pf = self.overflow(self.reg.a, result as u8);
-        self.flags.cf = result & 0x0100 != 0;
+        self.flags.cf = (result & 0x0100) != 0;
 
         self.reg.a = result as u8;
 
@@ -421,20 +429,93 @@ impl Cpu {
         self.adv_pc(2);
     }
 
+    /*// ADD (IX DD / FD Instructions)
+    // TODO Add addressing mode method helper for IX+* and IY+* etc ..
     fn add_ex(&mut self, dst: Register, src: Register) {
-        let result = (self.get_pair(dst)).wrapping_add(self.get_pair(src) as u16);
-        self.write_pair_direct(dst, result);
-        self.flags.sf = result & 0x80 != 0;
-        self.flags.zf = result & 0xFF == 0;
-        self.flags.hf = self.hf_add(self.reg.a, self.get_pair(src) as u8);
+        let result: u16 = match dst {
+            A => {
+                let result = (self.read_reg(dst) as u16).wrapping_add(self.get_pair(src));
+                self.write_reg(dst, result as u8);
+                self.cycles = self.cycles.wrapping_sub(7);
+                result
+            }
+            HL | IX | IY => {
+                let result = (self.get_pair(dst)).wrapping_add(self.get_pair(src) as u16);
+                self.write_pair_direct(dst, result);
+                result
+            }
+            _ => panic!("ADD_EX dst:{} src:{}", dst, src),
+        };
+         /*   IxIm | IyIm => {
+                let reg = if dst == IxIm {
+                    IX
+                } else if dst == IyIm {
+                    IY
+                } else {
+                    panic!();
+                };
+                // Displacement byte
+                let byte = self.read8(self.reg.pc + 2) as i8;
+                let addr = self.get_pair(reg).wrapping_add(byte as u16);
+                let result = (self.read_reg(dst) as u16).wrapping_add(self.get_pair(src) + addr) as u16;
+                self.write_reg(dst, result as u8);
+                self.flags.hf = self.hf_add(self.s self.get_pair(src) as u8);
+                result
+            },
+        };*/
+        // self.write_pair_direct(dst, result);
+        self.flags.sf = (result & 0x80) != 0;
+        self.flags.zf = (result & 0xFF) == 0;
         self.flags.pf = self.overflow(self.reg.a, result as u8);
         self.flags.nf = false;
-        self.flags.yf = result & 0x20 != 0;
-        self.flags.xf = result & 0x08 != 0;
-        self.flags.cf = result & 0x0100 != 0;
+        self.flags.yf = (result & 0x20) != 0;
+        self.flags.xf = (result & 0x08) != 0;
+        self.flags.cf = (result & 0x0100) != 0;
+        self.adv_cycles(15);
+        self.adv_pc(2);
+    }*/
+
+    pub(crate) fn add_hl(&mut self, reg: Register) {
+        let hl: u16 = self.get_pair(HL);
+        let (result, add) = (
+            (self.get_pair(HL) as u32).wrapping_add(self.get_pair(reg) as u32),
+            self.get_pair(reg),
+        );
+        self.write_pair_direct(HL, result as u16);
+        self.flags.cf = ((result >> 8) & 0x0100) != 0;
+
+        // TODO Figure out why HF_ADD_W doesn't work here
+        // self.flags.hf = self.hf_add_w(hl, add as u16);
+        self.flags.hf = self.carry(12, hl, add as u16);
+
+        self.flags.nf = false;
+        self.flags.yf = ((result >> 8) & 0x20) != 0;
+        self.flags.xf = ((result >> 8) & 0x08) != 0;
+        self.adv_cycles(11);
+        self.adv_pc(1);
+    }
+    // Passes ADD IX Zexdoc tests
+    pub(crate) fn add_ex(&mut self, dst: Register, src: Register) {
+        let (result, add) = (
+            (self.get_pair(dst) as u32).wrapping_add(self.get_pair(src) as u32),
+            self.get_pair(src),
+        );
+        if dst == A {
+            self.write_reg(dst, result as u8);
+        } else if dst != A {
+            self.write_pair_direct(dst, result as u16);
+        }
+        self.flags.cf = ((result >> 8) & 0x0100) != 0;
+        // self.flags.hf = self.hf_add_w(hl, add as u16);
+        self.flags.hf = self.carry(12, self.get_pair(src), add as u16);
+
+        self.flags.nf = false;
+        self.flags.yf = ((result >> 8) & 0x20) != 0;
+        self.flags.xf = ((result >> 8) & 0x08) != 0;
         self.adv_cycles(15);
         self.adv_pc(2);
     }
+
     fn add(&mut self, reg: Register) {
         let value = if reg != HL {
             self.read_reg(reg)
@@ -592,13 +673,13 @@ impl Cpu {
         self.reg.pc = self.get_pair(Register::HL) as u16;
     }
 
-    // 0xEDA0 Extended instruction
+    // Transfers a byte of data from the memory location pointed to by hl to the memory location
+    // pointed to by DE
+    // Then HL and DE are incremented and BC decremented.
     fn ldi(&mut self) {
         // YF and XF are copies of bit 1 of n and bit 3 of n respectively.
-        let de = self.read8(self.get_pair(DE));
         let hl = self.read8(self.get_pair(HL));
-        self.write8(de as u16, hl as u8);
-
+        self.write8(self.get_pair(DE), hl as u8);
         let n = hl.wrapping_add(self.reg.a);
 
         self.write_pair_direct(HL, self.get_pair(HL).wrapping_add(1));
@@ -633,7 +714,7 @@ impl Cpu {
     // Stores (REGPAIR) into the memory loc pointed to by **
     // TODO & LOAD INDIRECT BUG?
     fn ld_nn(&mut self, reg: Register) {
-        let ptr = self.read16(self.reg.pc + 1);
+        let ptr = self.read16(self.reg.pc + 2);
         self.write16(ptr, self.get_pair(reg));
         self.adv_cycles(20);
         self.adv_pc(4);
@@ -643,7 +724,7 @@ impl Cpu {
     // 0xED6B, 0xED5B etc..
     // Loads the value pointed to by ** into (REGPAIR)
     fn load_indirect(&mut self, reg: Register) {
-        let word = self.read16(self.reg.pc + 1);
+        let word = self.read16(self.reg.pc + 2);
         self.write_pair_direct(reg, self.read16(word));
         self.adv_cycles(20);
         self.adv_pc(4);
@@ -789,25 +870,7 @@ impl Cpu {
         self.flags.xf = (value & 0x08) != 0;
     }
 
-    pub(crate) fn add_hl(&mut self, reg: Register) {
-        let hl: u16 = self.get_pair(HL);
-        let (result, add) = (
-            (self.get_pair(HL) as u32).wrapping_add(self.get_pair(reg) as u32),
-            self.get_pair(reg),
-        );
-        self.write_pair_direct(HL, result as u16);
-        self.flags.cf = ((result >> 8) & 0x0100) != 0;
 
-        // TODO Figure out why HF_ADD_W doesn't work here
-        // self.flags.hf = self.hf_add_w(hl, add as u16);
-        self.flags.hf = self.carry(12, hl, add as u16);
-
-        self.flags.nf = false;
-        self.flags.yf = ((result >> 8) & 0x20) != 0;
-        self.flags.xf = ((result >> 8) & 0x08) != 0;
-        self.adv_cycles(11);
-        self.adv_pc(1);
-    }
 
     // Decrement memory or register
     fn dec(&mut self, reg: Register) {
@@ -1159,6 +1222,36 @@ impl Cpu {
         self.adv_cycles(4);
         self.adv_pc(1);
     }
+    // Extended SBC 0xED42 etc..
+    fn sbc_hl(&mut self, reg: Register) {
+        let value = match reg {
+            BC | DE | HL | SP | IX | IXH | IXL | IY | IYH | IYL | AF => self.get_pair(reg),
+            _ => panic!("SBC HL called with single register, use SBC instead"),
+        };
+        let result = self
+            .get_pair(HL)
+            .wrapping_sub(value as u16)
+            .wrapping_sub(self.flags.cf as u16);
+
+        self.flags.sf = (result & 0x80) != 0;
+        self.flags.zf = (result & 0xFF) == 0;
+        // self.flags.hf = self.hf_sub(self.reg.a, value as u8);
+
+        // TODO Check if this is correct, rational here is that since we're using HL as "A" we need
+        // to use HL instead of A for HF
+        self.flags.hf = self.hf_sub(self.get_pair(HL) as u8, value as u8);
+        self.flags.pf = self.overflow(value as u8, result as u8);
+        self.flags.yf = (result & 0x20) != 0;
+        self.flags.xf = (result & 0x08) != 0;
+        self.flags.cf = ((result >> 8) & 0x0100) != 0;
+        // self.flags.cf = (result & 0x0100) != 0;
+        self.flags.nf = true;
+        // Write back to HL instead of A unlike normal SBC
+        self.write_pair_direct(HL, result);
+
+        self.adv_cycles(15);
+        self.adv_pc(2);
+    }
     // TODO: SBI & SUI can be consolidated to one function
     // Subtract Immediate with Borrow
     fn sbi(&mut self) {
@@ -1451,7 +1544,7 @@ impl Cpu {
                     self.adv_cycles(3);
                 } else if (src == R) | (src == I) {
                     self.flags.sf = (self.reg.a & 0x80) != 0;
-                    self.flags.zf = self.reg.a == 0;
+                    self.flags.zf = (self.reg.a & 0xFF) == 0;
                     // TODO PF interrupt interrupt handling
                     self.flags.pf = self.int.iff2;
                     self.flags.hf = false;
@@ -1835,7 +1928,7 @@ impl Cpu {
                     .expect(format!("Unknown opcode:{:04x}", self.opcode).as_str());
 
                 match self.opcode {
-                    0x09 => unimplemented!("{:#?}", self.instruction),
+                    0x09 => self.add_ex(IX, BC),
                     0x19 => self.add_ex(IX, DE),
                     0x21 => {
                         self.reg.ix = self.read16(self.reg.pc + 2);
@@ -1853,10 +1946,8 @@ impl Cpu {
                     0x23 => self.inx(IX),
                     0x24 => unimplemented!("{:04x}", self.opcode),
                     0x25 => unimplemented!(),
-                    0x26 => {
-                        self.ld_ixh_ixl(IXH);
-                    }
-                    0x29 => unimplemented!("{:04x}", self.opcode),
+                    0x26 => self.ld_ixh_ixl(IXH),
+                    0x29 => self.add_ex(IX, IX),
                     0x2A => unimplemented!("{:04x}", self.opcode),
                     0x2B => unimplemented!("{:04x}", self.opcode),
                     0x2C => unimplemented!("{:04x}", self.opcode),
@@ -1865,7 +1956,7 @@ impl Cpu {
                     0x34 => unimplemented!("{:04x}", self.opcode),
                     0x35 => unimplemented!("{:04x}", self.opcode),
                     0x36 => unimplemented!("{:04x}", self.opcode),
-                    0x39 => unimplemented!("{:04x}", self.opcode),
+                    0x39 => self.add_ex(IX, SP),
                     0x3C => unimplemented!("{:04x}", self.opcode),
                     0x3D => unimplemented!("{:04x}", self.opcode),
                     0x3E => unimplemented!("{:04x}", self.opcode),
@@ -1880,16 +1971,16 @@ impl Cpu {
                         self.adv_cycles(19);
                     }
                     0x77 => self.ld_dd(A, IX),
+                    0x84 => self.add_ex(A, IXH),
+                    0x85 => self.add_ex(A, IXL),
+                    0x86 => self.add_ex(A, IxIm),
                     0xE9 => {
                         self.opcode = 0xDDE9;
                         self.instruction.cycles = 8;
                         self.jp(self.reg.ix);
                     }
 
-                    _ => panic!(
-                        "Unknown or unimplemented instruction:{:#?}",
-                        self.instruction
-                    ),
+                    _ => unimplemented!("Unimplemented DD instruction: DD{:02X}", self.next_opcode),
                 }
             }
             0xDE => self.sbi(),
@@ -1911,6 +2002,7 @@ impl Cpu {
             0xED => {
                 self.opcode = self.read8(self.reg.pc + 1) as u16;
                 self.reg.r = (self.reg.r & 0x80) | (self.reg.r.wrapping_add(1)) & 0x7f;
+                // TODO Handle this better where the actual opcode gets set to 0xED(OPCODE)
                 match self.opcode {
                     0x08 => self.in_c(C),
                     0xA0 => self.ldi(),
@@ -1920,28 +2012,30 @@ impl Cpu {
                     0x43 => self.ld_nn(BC),
                     0x46 => self.set_interrupt_mode(0),
                     0x47 => self.ld(I, A),
+                    0x4A => self.adc_hl(BC),
+                    0x4B => self.load_indirect(BC),
+                    0x4F => self.ld(R, A),
                     0x50 => self.in_c(D),
                     0x52 => self.sbc(DE),
                     0x53 => self.ld_nn(DE),
                     0x5E => self.set_interrupt_mode(2),
                     0x56 => self.set_interrupt_mode(1),
                     0x57 => self.ld(A, I),
-                    0x63 => self.ld_nn(HL),
-                    0x66 => self.set_interrupt_mode(0),
-                    0x76 => self.set_interrupt_mode(1),
-                    0x4A => self.adc_hl(BC),
-                    0x4B => self.load_indirect(BC),
-                    0x4F => self.ld(R, A),
                     0x5F => self.ld(A, R),
                     0x5A => self.adc_hl(DE),
                     0x5B => self.load_indirect(DE),
+                    0x62 => self.sbc_hl(HL),
+                    0x63 => self.ld_nn(HL),
+                    0x66 => self.set_interrupt_mode(0),
                     0x6A => self.adc_hl(HL),
                     0x6B => self.load_indirect(HL),
+                    0x72 => self.sbc_hl(SP),
                     0x73 => self.ld_nn(SP),
+                    0x76 => self.set_interrupt_mode(1),
                     0x7B => self.load_indirect(SP),
                     0x7A => self.adc_hl(SP),
                     0x7E => self.set_interrupt_mode(2),
-                    _ => panic!("{:#?}", Instruction::decode(self.opcode, self.next_opcode)),
+                    _ => unimplemented!("Unimplemented ED instruction:ED{:02X}", self.next_opcode),
                 }
             }
 
