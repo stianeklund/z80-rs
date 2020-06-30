@@ -947,6 +947,7 @@ impl Instruction {
                 0x56 => Instruction::from("IM 2", 2, 8, 0, 0xED56),
                 0x57 => Instruction::from("LD A, I", 2, 9, 0, 0xED57),
                 0x5E => Instruction::from("IM 2", 2, 8, 0, 0xED5E),
+                0x5B => Instruction::from("LD DE, (**)", 4, 20, 0, 0xED5F),
                 0x5F => Instruction::from("LD A,R", 2, 9, 0, 0xED5F),
                 0x62 => Instruction::from("SBC (**), HL", 4, 20, 0, 0xED62),
                 0x63 => Instruction::from("LD (**), HL", 4, 20, 0, 0xED63),

@@ -679,7 +679,7 @@ impl Cpu {
                 self.reg.pc = self.read16(self.reg.pc + 1);
             }
             _ => {
-                println!("CALL to address:{:04X}", addr);
+                // println!("CALL to address:{:04X}", addr);
                 self.reg.pc = addr;
             },
         };
@@ -1039,13 +1039,13 @@ impl Cpu {
         let b = self.read8(self.reg.pc + 1) as u16;
         let pair = self.get_pair(src);
         match dst {
-            A => self.memory[pair + b] = self.read_reg(src),
-            B => self.memory[pair + b] = self.read_reg(src),
-            C => self.memory[pair + b] = self.read_reg(src),
-            D => self.memory[pair + b] = self.read_reg(src),
-            E => self.memory[pair + b] = self.read_reg(src),
-            H => self.memory[pair + b] = self.read_reg(src),
-            L => self.memory[pair + b] = self.read_reg(src),
+            A => self.memory[pair.wrapping_add(b)] = self.read_reg(src),
+            B => self.memory[pair.wrapping_add(b)] = self.read_reg(src),
+            C => self.memory[pair.wrapping_add(b)] = self.read_reg(src),
+            D => self.memory[pair.wrapping_add(b)] = self.read_reg(src),
+            E => self.memory[pair.wrapping_add(b)] = self.read_reg(src),
+            H => self.memory[pair.wrapping_add(b)] = self.read_reg(src),
+            L => self.memory[pair.wrapping_add(b)] = self.read_reg(src),
             _ => panic!(
                 "DD / FD prefixed LD unknown destination: {:?}, src:{:?}",
                 dst, src
@@ -1384,9 +1384,7 @@ impl Cpu {
     fn out(&mut self, reg: Register) {
         // Set port:
         let port = self.read8(self.reg.pc + 1);
-        /*if self.debug {
-            println!("Out port: {:02x}, value: {:02x}", port, self.read_reg(reg));
-        }*/
+        // println!("Out port: {:02x}, value: {:02x}", port, self.read_reg(reg));
         self.io.value = self.read_reg(reg);
         self.io.port = port;
         self.adv_cycles(11);
@@ -1524,7 +1522,7 @@ impl Cpu {
 
     pub(crate) fn fetch(&mut self) {
         self.opcode = self.read8(self.reg.pc) as u16;
-        self.next_opcode = self.read8(self.reg.pc + 1) as u16;
+        self.next_opcode = self.read8(self.reg.pc.wrapping_add(1)) as u16;
         self.instruction = Instruction::decode(self.opcode, self.next_opcode)
             .expect(format!("Unknown opcode:{:04X}", self.opcode).as_str());
 
@@ -1880,7 +1878,7 @@ impl Cpu {
                         self.adv_pc(3);
                         self.adv_cycles(19);
                     }
-                    0x77 => self.ld_dd(IX, A),
+                    0x77 => self.ld_dd(A, IX),
                     0xE9 => {
                         self.opcode = 0xDDE9;
                         self.instruction.cycles = 8;
@@ -2142,14 +2140,19 @@ impl Cpu {
                     if self.io.port == 0 {
                         self.int.vector = self.io.value;
                     }
-                    let addr = self.read16((self.reg.i.wrapping_shl(8) | self.int.vector) as u16);
-                    self.rst(addr);
+                    // The interrupt vector is two part, composed by the I register and the lower
+                    // 8-bits of the vector is placed on the bus. The resulting address is a vector
+                    // that points to the beginning of RAM, the resulting address from reading this
+                    // is the interrupt handler routine.
+                    // let vector = self.read16((self.reg.i.wrapping_shl(8) | self.int.vector) as u16);
+                    let vector = self.reg.i.wrapping_shl(8) | self.io.value;
+                    self.call(vector as u16);
 
                     self.int.int = false;
                     self.int.irq = false;
-                    /*if self.debug {
-                        println!("Servicing interrupt, mode 2: Addr:{:04X}", addr);
-                    }*/
+                    if self.debug {
+                        println!("Servicing interrupt: Mode 2");
+                    }
                 }
                 _ => panic!("Unhandled interrupt mode"),
             }
