@@ -1,6 +1,16 @@
 use crate::instruction_info::{Instruction, Register, Register::*};
 use crate::memory::{Memory, MemoryRW};
 
+pub enum AddressMode {
+    Immediate,
+    ExtendedImmediate,
+    Register,
+    RegisterIndirect,
+    Extended,
+    Relative,
+    Indexed,
+    Bit,
+}
 pub struct Cpu {
     pub current_instruction: String,
     pub opcode: u16,
@@ -13,7 +23,6 @@ pub struct Cpu {
     pub io: Io,
     pub int: Interrupt,
     pub instruction: Instruction,
-    pub last_instructions: Vec<u16>,
     pub int_pending: bool,
     pub cpm_compat: bool,
     pub memory: Memory,
@@ -230,7 +239,6 @@ impl Cpu {
             instruction: Instruction::default(),
             memory: Memory::default(),
             cpm_compat: false,
-            last_instructions: vec![0; 20],
         }
     }
 
@@ -256,15 +264,14 @@ impl Cpu {
             BC => self.get_pair(BC) as u8,
             DE => self.get_pair(DE) as u8,
             HL => self.get_pair(HL) as u8,
+            IyIm | IxIm => self.read8(self.reg.pc + 1),
             _ => {
                 println!(
                     "Called by:{}, Opcode:{:02X}",
                     self.current_instruction, self.opcode
                 );
-                eprintln!(
-                    "Instruction:{:?}",
-                    Instruction::decode(self.opcode, self.next_opcode)
-                );
+                eprintln!("Instruction:{:?}", Instruction::decode(self));
+                eprintln!("{:#?}", Instruction::print_disassembly(self));
                 panic!("Register not supported:{:#?}", reg)
             }
         }
@@ -325,11 +332,7 @@ impl Cpu {
             AF => ((self.reg.a as u16) << 8 | (self.flags.get() as u16)),
             _ => {
                 println!("Called from:{:#?}", self.instruction);
-                for i in self.last_instructions.iter() {
-                    Instruction::decode(*i, i + 1);
-
-                }
-                println!("Previous instructions:{:#?}", self.last_instructions.iter().enumerate());
+                Instruction::decode(self);
                 panic!();
             }
         }
@@ -346,21 +349,34 @@ impl Cpu {
     // TODO refactor ADD / ADC instructions
     // pass value in from the caller and have one method for most of these
     fn adc(&mut self, reg: Register) {
-        let value = if reg != Register::HL {
-            self.read_reg(reg)
+        let value = if reg == IxIm {
+            let value = self.reg.ix + self.read8(self.reg.pc + 1) as u16;
+            self.adv_pc(2);
+            self.adv_cycles(15);
+            value
+        } else if reg == IyIm {
+            let value = self.reg.iy + self.read8(self.reg.pc + 1) as u16;
+            self.adv_pc(2);
+            self.adv_cycles(15);
+            value
+        } else if reg != HL {
+            self.read_reg(reg) as u16
         } else if reg == Register::HL {
             self.adv_cycles(3);
-            self.memory[self.get_pair(Register::HL)]
+            self.memory[self.get_pair(Register::HL)] as u16
         } else {
-            unimplemented!("{:#?}, Reg:{:#?}", self.instruction, reg);
+            unimplemented!();
         };
-        let result: u16 = (self.reg.a as u16)
-            .wrapping_add(value as u16)
-            .wrapping_add(self.flags.cf as u16);
+        let result: u16 = (self.reg.a as u16).wrapping_add(value as u16).wrapping_add(self.flags.cf as u16);
 
+
+        if reg == IXH || reg == IXL || reg == IYL || reg == IYH {
+            self.adv_pc(1);
+            self.adv_cycles(4);
+        }
         self.flags.sf = (result & 0x80) != 0;
         self.flags.zf = (result & 0xFF) == 0;
-        self.flags.hf = self.hf_add(self.reg.a, value);
+        self.flags.hf = self.hf_add(self.reg.a, value as u8);
         self.flags.pf = self.overflow(self.reg.a, result as u8);
         self.flags.nf = false;
         self.flags.yf = (result & 0x20) != 0;
@@ -373,6 +389,7 @@ impl Cpu {
         self.adv_pc(1);
     }
     fn adc_hl(&mut self, reg: Register) {
+        let hl = self.get_pair(HL);
         let result = match reg {
             BC => (self.get_pair(HL) as u32)
                 .wrapping_add(self.get_pair(BC) as u32)
@@ -394,7 +411,7 @@ impl Cpu {
         self.flags.zf = (result & 0xFF) == 0;
         self.flags.pf = self.overflow(result.wrapping_sub(1) as u8, result as u8);
         self.flags.cf = ((result >> 8) & 0x0100) != 0;
-        self.flags.hf = self.hf_add(self.reg.a, (result >> 8) as u8);
+        self.flags.hf = self.hf_add(hl as u8, (result >> 8) as u8);
         self.flags.nf = false;
         self.flags.yf = ((result >> 8) & 0x20) != 0;
         self.flags.xf = ((result >> 8) & 0x08) != 0;
@@ -429,52 +446,6 @@ impl Cpu {
         self.adv_pc(2);
     }
 
-    /*// ADD (IX DD / FD Instructions)
-    // TODO Add addressing mode method helper for IX+* and IY+* etc ..
-    fn add_ex(&mut self, dst: Register, src: Register) {
-        let result: u16 = match dst {
-            A => {
-                let result = (self.read_reg(dst) as u16).wrapping_add(self.get_pair(src));
-                self.write_reg(dst, result as u8);
-                self.cycles = self.cycles.wrapping_sub(7);
-                result
-            }
-            HL | IX | IY => {
-                let result = (self.get_pair(dst)).wrapping_add(self.get_pair(src) as u16);
-                self.write_pair_direct(dst, result);
-                result
-            }
-            _ => panic!("ADD_EX dst:{} src:{}", dst, src),
-        };
-         /*   IxIm | IyIm => {
-                let reg = if dst == IxIm {
-                    IX
-                } else if dst == IyIm {
-                    IY
-                } else {
-                    panic!();
-                };
-                // Displacement byte
-                let byte = self.read8(self.reg.pc + 2) as i8;
-                let addr = self.get_pair(reg).wrapping_add(byte as u16);
-                let result = (self.read_reg(dst) as u16).wrapping_add(self.get_pair(src) + addr) as u16;
-                self.write_reg(dst, result as u8);
-                self.flags.hf = self.hf_add(self.s self.get_pair(src) as u8);
-                result
-            },
-        };*/
-        // self.write_pair_direct(dst, result);
-        self.flags.sf = (result & 0x80) != 0;
-        self.flags.zf = (result & 0xFF) == 0;
-        self.flags.pf = self.overflow(self.reg.a, result as u8);
-        self.flags.nf = false;
-        self.flags.yf = (result & 0x20) != 0;
-        self.flags.xf = (result & 0x08) != 0;
-        self.flags.cf = (result & 0x0100) != 0;
-        self.adv_cycles(15);
-        self.adv_pc(2);
-    }*/
-
     pub(crate) fn add_hl(&mut self, reg: Register) {
         let hl: u16 = self.get_pair(HL);
         let (result, add) = (
@@ -494,13 +465,14 @@ impl Cpu {
         self.adv_cycles(11);
         self.adv_pc(1);
     }
-    // Passes ADD IX Zexdoc tests
+    // Passes ADD IX & ADD IY Zexdoc tests
+    // TODO Does not pass IXL IXH etc tests.. specifically fails at 0xDD84
     pub(crate) fn add_ex(&mut self, dst: Register, src: Register) {
         let (result, add) = (
             (self.get_pair(dst) as u32).wrapping_add(self.get_pair(src) as u32),
             self.get_pair(src),
         );
-        if dst == A {
+        if dst == A && src == IXL || src == IXH || src == IYH || src == IYL {
             self.write_reg(dst, result as u8);
         } else if dst != A {
             self.write_pair_direct(dst, result as u16);
@@ -516,19 +488,29 @@ impl Cpu {
         self.adv_pc(2);
     }
 
+    // Can be consolidated into just simply using addressing modes..
+
     fn add(&mut self, reg: Register) {
         let value = if reg != HL {
-            self.read_reg(reg)
+            self.read_reg(reg) as u16
+        } else if reg == IxIm || reg == IyIm {
+            self.adv_pc(2);
+            self.adv_cycles(15);
+            self.reg.ix + self.read8(self.reg.pc + 1) as u16
         } else {
             self.adv_cycles(3);
-            self.memory[self.get_pair(HL)]
+            self.memory[self.get_pair(HL)] as u16
         };
 
+        if reg == IXL || reg == IXH || reg == IYL || reg == IYL {
+            self.adv_cycles(4);
+            self.adv_pc(1);
+        }
         let result = (self.reg.a as u16).wrapping_add(value as u16);
 
         self.flags.sf = (result & 0x80) != 0;
         self.flags.zf = (result & 0xFF) == 0;
-        self.flags.hf = self.hf_add(self.reg.a, value);
+        self.flags.hf = self.hf_add(self.reg.a, value as u8);
         self.flags.pf = self.overflow(self.reg.a, result as u8);
         self.flags.nf = false;
         self.flags.yf = (result & 0x20) != 0;
@@ -563,15 +545,29 @@ impl Cpu {
         self.adv_pc(2);
     }
 
-    pub fn ana(&mut self, reg: Register) {
+    pub fn and(&mut self, reg: Register) {
         let value = if reg != Register::HL {
-            self.read_reg(reg)
+            self.read_reg(reg) as u16
+
+        } else if reg == IyIm {
+            self.adv_pc(2);
+            self.adv_cycles(15);
+            self.get_pair(IY) + self.read8(self.reg.pc + 1) as u16
+        } else if reg == IxIm {
+            self.adv_pc(2);
+            self.adv_pc(2);
+            self.adv_cycles(15);
+            self.get_pair(IX) + self.read8(self.reg.pc + 1) as u16
         } else {
             self.adv_cycles(3);
-            self.memory[self.get_pair(Register::HL)]
+            self.memory[self.get_pair(Register::HL)] as u16
         };
+        if reg == IXL || reg == IXH || reg == IYL || reg == IYH {
+                self.adv_cycles(4);
+                self.adv_pc(1);
+            }
         // And value with accumulator
-        let result = self.reg.a & value;
+        let result = self.reg.a & value as u8;
 
         self.flags.sf = (result & 0x80) != 0;
         self.flags.zf = (result & 0xFF) == 0;
@@ -798,12 +794,25 @@ impl Cpu {
         self.adv_pc(1);
     }
     fn cmp(&mut self, reg: Register) {
-        let mut value = 0;
-        if reg != HL {
-            value = self.read_reg(reg);
+        let mut value = if reg == IxIm {
+            let r = self.reg.ix + self.read8(self.reg.pc + 1) as u16;
+            self.adv_cycles(15);
+            self.adv_pc(2);
+            r
+        } else if reg == IyIm {
+            let r = self.reg.iy + self.read8(self.reg.pc + 1) as u16;
+            self.adv_cycles(15);
+            self.adv_pc(2);
+            r
         } else if reg == HL {
             self.adv_cycles(3);
-            value = self.memory[self.get_pair(HL)];
+            self.memory[self.get_pair(HL)] as u16
+        } else {
+            self.read_reg(reg) as u16
+        };
+        if reg == IXL || reg == IXH || reg == IYL || reg == IYL {
+            self.adv_cycles(4);
+            self.adv_pc(1);
         }
         let result = (self.reg.a as u16).wrapping_sub(value as u16);
         let overflow = (self.reg.a as i8).overflowing_sub(value as i8).1;
@@ -829,8 +838,9 @@ impl Cpu {
         self.adv_pc(1);
     }
 
+    // TODO Use addressing modes here
     // Compare Immediate with Accumulator
-    fn cp(&mut self) {
+    fn cp_im(&mut self) {
         let value = self.read8(self.reg.pc + 1);
         let result = (self.reg.a as i16).wrapping_sub(value as i16);
         let overflow = (self.reg.a as i8).overflowing_sub(value as i8).1;
@@ -869,8 +879,6 @@ impl Cpu {
         self.flags.yf = (value & 0x20) != 0;
         self.flags.xf = (value & 0x08) != 0;
     }
-
-
 
     // Decrement memory or register
     fn dec(&mut self, reg: Register) {
@@ -1198,21 +1206,45 @@ impl Cpu {
 
     // SBC Subtract Register or Memory from Accumulator with carry flag
     fn sbc(&mut self, reg: Register) {
-        let value = if reg != HL {
-            self.read_reg(reg)
+        let mut value = if reg != HL {
+            self.read_reg(reg) as u16
         } else {
             self.adv_cycles(3);
-            self.memory[self.get_pair(HL)]
+            self.memory[self.get_pair(HL)] as u16
         };
 
-        let result = (self.reg.a as u16)
-            .wrapping_sub(value as u16)
-            .wrapping_sub(self.flags.cf as u16);
+        if reg == IXL || reg == IYL || reg == IYH || reg == IXH {
+            self.adv_cycles(4);
+            self.adv_pc(2);
+        }
+        let (result, value) = if reg == IxIm {
+            let value = self.reg.ix + self.read8(self.reg.pc + 1) as u16;
+            self.adv_pc(3);
+            self.adv_cycles(19);
+            let result = (self.reg.a as u16)
+                .wrapping_sub(value)
+                .wrapping_sub(self.flags.cf as u16);
+            (result, value)
+        } else if reg == IyIm {
+            value = self.reg.ix + self.read8(self.reg.pc + 1) as u16;
+            self.adv_pc(3);
+            self.adv_cycles(19);
+            let result = (self.reg.a as u16)
+                .wrapping_sub(value)
+                .wrapping_sub(self.flags.cf as u16);
+            (result, value)
+        } else {
+            value = self.reg.ix + self.read8(self.reg.pc + 1) as u16;
+            let result = (self.reg.a as u16)
+                .wrapping_sub(value as u16)
+                .wrapping_sub(self.flags.cf as u16);
+
+            (result, value)
+        };
 
         self.flags.sf = (result & 0x80) != 0;
         self.flags.zf = (result & 0xFF) == 0;
-        self.flags.hf = self.hf_sub(self.reg.a, value as u8);
-        self.flags.pf = self.overflow(value, result as u8);
+        self.flags.pf = self.overflow(value as u8, result as u8);
         self.flags.yf = (result & 0x20) != 0;
         self.flags.xf = (result & 0x08) != 0;
         self.flags.cf = (result & 0x0100) != 0;
@@ -1239,6 +1271,7 @@ impl Cpu {
 
         // TODO Check if this is correct, rational here is that since we're using HL as "A" we need
         // to use HL instead of A for HF
+
         self.flags.hf = self.hf_sub(self.get_pair(HL) as u8, value as u8);
         self.flags.pf = self.overflow(value as u8, result as u8);
         self.flags.yf = (result & 0x20) != 0;
@@ -1277,22 +1310,33 @@ impl Cpu {
     // SUB Subtract Register or Memory From Accumulator
     fn sub(&mut self, reg: Register) {
         let value = if reg != HL {
-            self.read_reg(reg)
-        } else {
-            self.adv_cycles(3);
-            self.memory[self.get_pair(HL)]
-        };
-        if (reg == IX) | (reg == IY) {
+            self.read_reg(reg) as u16
+        } else if reg == IxIm {
+            self.adv_cycles(15);
+            self.adv_pc(2);
+            u16::from(self.read8(self.get_pair(IX) + self.read8(self.reg.pc + 1) as u16))
+        } else if reg == IyIm {
+            self.adv_cycles(15);
+            self.adv_pc(2);
+            u16::from(self.read8(self.get_pair(IY) + self.read8(self.reg.pc + 1) as u16))
+        } else if reg == IX {
             self.adv_pc(1);
             self.adv_cycles(4);
-        }
-
+            self.reg.ix
+        } else if reg == IY {
+            self.adv_pc(1);
+            self.adv_cycles(4);
+            self.reg.iy
+        } else {
+            self.adv_cycles(3);
+            self.memory[self.get_pair(HL)] as u16
+        };
         let result = (self.reg.a as u16).wrapping_sub(value as u16);
         let overflow = (self.reg.a as i8).overflowing_sub(value as i8).1;
 
         self.flags.sf = (result & 0x80) != 0;
         self.flags.zf = (result & 0xFF) == 0;
-        self.flags.hf = self.hf_sub(self.reg.a, value);
+        self.flags.hf = self.hf_sub(self.reg.a, value as u8);
         self.flags.pf = overflow;
         self.flags.nf = true;
         self.flags.yf = (result & 0x20) != 0;
@@ -1337,13 +1381,26 @@ impl Cpu {
     }
 
     // XRA Logical Exclusive-Or memory with Accumulator (Zero accumulator)
-    fn xra(&mut self, reg: Register) {
+    fn xor(&mut self, reg: Register) {
         let value = if reg != HL {
-            self.read_reg(reg)
-        } else {
+            self.read_reg(reg) as u16
+        } else if reg == IxIm {
+            self.adv_pc(2);
+            self.adv_pc(15);
+            self.reg.ix + self.read8(self.reg.pc + 1) as u16
+        } else if reg == IyIm {
+            self.adv_pc(2);
+            self.adv_pc(15);
+            self.reg.iy + self.read8(self.reg.pc + 1) as u16
+            } else {
             self.adv_cycles(3);
-            self.memory[self.get_pair(HL)]
+            self.memory[self.get_pair(HL)] as u16
         };
+
+        if reg == IXL || reg == IXH || reg == IYL || reg == IYL {
+            self.adv_cycles(4);
+            self.adv_pc(1);
+        }
 
         let result = self.reg.a as u16 ^ value as u16;
 
@@ -1486,10 +1543,18 @@ impl Cpu {
     // TODO: Consolidate ORA & ORI (pass value directly)
     fn ora(&mut self, reg: Register) {
         let value = if reg != HL {
-            self.read_reg(reg)
+            self.read_reg(reg) as u16
+        } else if reg == IxIm {
+            self.adv_pc(2);
+            self.adv_cycles(15);
+            self.reg.ix + self.read8(self.reg.pc + 1) as u16
+        } else if reg == IyIm {
+            self.adv_pc(2);
+            self.adv_cycles(15);
+            self.reg.iy + self.read8(self.reg.pc + 1) as u16
         } else {
             self.adv_cycles(3);
-            self.memory[self.get_pair(HL)]
+            self.memory[self.get_pair(HL)] as u16
         };
 
         let result = self.reg.a as u16 | value as u16;
@@ -1614,10 +1679,11 @@ impl Cpu {
     }
 
     pub(crate) fn fetch(&mut self) {
+        // What if fetch(mut self, mode: AddressMode) and provided decode with the correct increment
+        // and likewise would return the data for each instruction to work with?
         self.opcode = self.read8(self.reg.pc) as u16;
         self.next_opcode = self.read8(self.reg.pc.wrapping_add(1)) as u16;
-        self.last_instructions.push(self.opcode);
-        self.instruction = Instruction::decode(self.opcode, self.next_opcode)
+        self.instruction = Instruction::decode(self)
             .expect(format!("Unknown opcode:{:04X}", self.opcode).as_str());
 
         if self.instruction.name.to_string().len() < 1 {
@@ -1822,24 +1888,24 @@ impl Cpu {
             0x9F => self.sbc(A),
 
             // ANA
-            0xA0 => self.ana(B),
-            0xA1 => self.ana(C),
-            0xA2 => self.ana(D),
-            0xA3 => self.ana(E),
-            0xA4 => self.ana(H),
-            0xA5 => self.ana(L),
-            0xA6 => self.ana(HL),
-            0xA7 => self.ana(A),
+            0xA0 => self.and(B),
+            0xA1 => self.and(C),
+            0xA2 => self.and(D),
+            0xA3 => self.and(E),
+            0xA4 => self.and(H),
+            0xA5 => self.and(L),
+            0xA6 => self.and(HL),
+            0xA7 => self.and(A),
 
             // XRA
-            0xA8 => self.xra(B),
-            0xA9 => self.xra(C),
-            0xAA => self.xra(D),
-            0xAB => self.xra(E),
-            0xAC => self.xra(H),
-            0xAD => self.xra(L),
-            0xAE => self.xra(HL),
-            0xAF => self.xra(A),
+            0xA8 => self.xor(B),
+            0xA9 => self.xor(C),
+            0xAA => self.xor(D),
+            0xAB => self.xor(E),
+            0xAC => self.xor(H),
+            0xAD => self.xor(L),
+            0xAE => self.xor(HL),
+            0xAF => self.xor(A),
 
             // ORA Instructions  0xB(reg)
             0xB0 => self.ora(B),
@@ -1874,9 +1940,8 @@ impl Cpu {
 
             0xCA => self.jp_cond(self.flags.zf),
             0xCB => {
-                self.opcode = self.read8(self.reg.pc + 1) as u16;
                 self.reg.r = (self.reg.r & 0x80) | (self.reg.r.wrapping_add(1)) & 0x7f;
-                match self.opcode {
+                match self.next_opcode {
                     0x00 => self.rlc(B),
                     0x01 => self.rlc(C),
                     0x02 => self.rlc(D),
@@ -1922,12 +1987,12 @@ impl Cpu {
             0xDB => self.in_a(),
             0xDC => self.call_cond(0xDC, self.flags.cf),
             0xDD => {
-                self.opcode = self.read8(self.reg.pc + 1) as u16;
+                // self.opcode = self.read8(self.reg.pc + 1) as u16;
                 self.reg.r = (self.reg.r & 0x80) | self.reg.r.wrapping_add(1) & 0x7f;
-                self.instruction = Instruction::decode(self.opcode, self.next_opcode)
+                self.instruction = Instruction::decode(self)
                     .expect(format!("Unknown opcode:{:04x}", self.opcode).as_str());
 
-                match self.opcode {
+                match self.next_opcode {
                     0x09 => self.add_ex(IX, BC),
                     0x19 => self.add_ex(IX, DE),
                     0x21 => {
@@ -1971,11 +2036,31 @@ impl Cpu {
                         self.adv_cycles(19);
                     }
                     0x77 => self.ld_dd(A, IX),
-                    0x84 => self.add_ex(A, IXH),
-                    0x85 => self.add_ex(A, IXL),
-                    0x86 => self.add_ex(A, IxIm),
+                    0x84 => self.add(IXH),
+                    0x85 => self.add(IXL),
+                    0x86 => self.add(IxIm),
+                    0x8C => self.adc(IXH),
+                    0x8D => self.adc(IXL),
+                    0x8E => self.adc(IxIm),
+                    0x94 => self.sub(IXH),
+                    0x95 => self.sub(IXL),
+                    0x9C => self.sbc(IXH),
+                    0x9D => self.sbc(IXL),
+                    0x9E => self.sbc(IxIm),
+                    0x96 => self.sub(IxIm),
+                    0xA4 => self.and(IXH),
+                    0xA5 => self.and(IXL),
+                    0xA6 => self.add(IxIm),
+                    0xAC => self.xor(IXH),
+                    0xAD => self.xor(IXL),
+                    0xAE => self.xor(IxIm),
+                    0xB4 => self.ora(IXH),
+                    0xB5 => self.ora(IXL),
+                    0xB6 => self.ora(IxIm),
+                    0xBC => self.cmp(IXH),
+                    0xBD => self.cmp(IXH),
+                    0xBE => self.cmp(IxIm),
                     0xE9 => {
-                        self.opcode = 0xDDE9;
                         self.instruction.cycles = 8;
                         self.jp(self.reg.ix);
                     }
@@ -2000,10 +2085,8 @@ impl Cpu {
             0xEB => self.ex_de_hl(),
             0xEC => self.call_cond(0xEC, self.flags.pf),
             0xED => {
-                self.opcode = self.read8(self.reg.pc + 1) as u16;
                 self.reg.r = (self.reg.r & 0x80) | (self.reg.r.wrapping_add(1)) & 0x7f;
-                // TODO Handle this better where the actual opcode gets set to 0xED(OPCODE)
-                match self.opcode {
+                match self.next_opcode {
                     0x08 => self.in_c(C),
                     0xA0 => self.ldi(),
                     0xA1 => self.cpi(),
@@ -2055,9 +2138,8 @@ impl Cpu {
             0xFB => self.interrupt(true),
             0xFC => self.call_cond(0xFC, self.flags.sf),
             0xFD => {
-                self.opcode = self.read8(self.reg.pc + 1) as u16;
                 self.reg.r = (self.reg.r & 0x80) | (self.reg.r.wrapping_add(1)) & 0x7f;
-                match self.opcode {
+                match self.next_opcode {
                     0x09 => self.add_ex(IY, BC),
                     0x6E => self.ld_dd(L, IY), // ld l,(iy+*)
                     0x19 => self.add_ex(IY, DE),
@@ -2106,10 +2188,36 @@ impl Cpu {
                         self.adv_pc(3);
                         self.adv_cycles(19);
                     }
-                    _ => panic!("{:#?}", Instruction::decode(self.opcode, self.next_opcode)),
+
+                    0x84 => self.add(IYH),
+                    0x85 => self.add(IYL),
+                    0x86 => self.add(IyIm),
+                    0x8C => self.adc(IYH),
+                    0x8D => self.adc(IYL),
+                    0x8E => self.adc(IyIm),
+
+                    0x94 => self.sub(IYH),
+                    0x95 => self.sub(IYL),
+                    0x96 => self.sub(IyIm),
+                    0x9C => self.sbc(IYH),
+                    0x9D => self.sbc(IYL),
+                    0x9E => self.sbc(IyIm),
+                    0xA4 => self.and(IYH),
+                    0xA5 => self.and(IYL),
+                    0xA6 => self.and(IyIm),
+                    0xAC => self.xor(IYH),
+                    0xAD => self.xor(IYL),
+                    0xAE => self.xor(IyIm),
+                    0xB4 => self.ora(IYH),
+                    0xB5 => self.ora(IYL),
+                    0xB6 => self.ora(IyIm),
+                    0xBC => self.cmp(IYH),
+                    0xBD => self.cmp(IYH),
+                    0xBE => self.cmp(IxIm),
+                    _ => panic!("{:#?}", Instruction::decode(self)),
                 }
             }
-            0xFE => self.cp(),
+            0xFE => self.cp_im(),
             0xFF => self.rst(0x0038),
             _ => println!("Unknown opcode: {:04X}", self.opcode),
         }

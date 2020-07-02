@@ -1,6 +1,9 @@
 use std::fmt;
 use std::fmt::Formatter;
 
+use crate::cpu::Cpu;
+use crate::memory::MemoryRW;
+
 #[derive(Default)]
 pub struct Instruction {
     pub name: String,   // Mnemonic
@@ -67,6 +70,15 @@ impl fmt::UpperHex for Register {
 }
 
 impl Instruction {
+    pub fn print_disassembly(cpu: &Cpu) {
+        eprintln!(
+            "{:02X} {:02X} {:02X} {:02X})\t",
+            cpu.read8(cpu.reg.pc),
+            cpu.read8(cpu.reg.pc.wrapping_add(1)),
+            cpu.read8(cpu.reg.pc.wrapping_add(2)),
+            cpu.read8(cpu.reg.pc.wrapping_add(3))
+        );
+    }
     pub fn default() -> Self {
         Self {
             name: String::with_capacity(5),
@@ -87,12 +99,13 @@ impl Instruction {
             opcode,
         }
     }
+
     // Used for debugging, contains all of the known opcodes, instruction cycles and alternative
     // branch cycles and the respective opcode
-    pub fn decode(opcode: u16, next_op: u16) -> Option<Instruction> {
+    pub fn decode(cpu: &Cpu) -> Option<Instruction> {
         // MNEMONIC, Byte size, CPU cycles, conditional extra cycles
 
-        Option::from(match opcode {
+        Option::from(match cpu.opcode {
             0x00 => Instruction::from("NOP", 1, 4, 0, 0x00),
             0x01 => Instruction::from("LD BC, **", 3, 10, 0, 0x0),
             0x02 => Instruction::from("LD (BC), A", 1, 7, 0, 0x01),
@@ -296,7 +309,7 @@ impl Instruction {
             0xC8 => Instruction::from("RET Z", 1, 11, 5, 0xC8),
             0xC9 => Instruction::from("RET", 1, 10, 0, 0xC9),
             0xCA => Instruction::from("JP Z, **", 3, 10, 0, 0xCA),
-            0xCB => match next_op {
+            0xCB => match cpu.next_opcode {
                 0x00 => Instruction::from("RLC B", 2, 8, 0, 0xCB00),
                 0x01 => Instruction::from("RLC C", 2, 8, 0, 0xCB01),
                 0x02 => Instruction::from("RLC D", 2, 8, 0, 0xCB02),
@@ -572,7 +585,7 @@ impl Instruction {
             0xDA => Instruction::from("JP C, **", 3, 10, 0, 0xDA),
             0xDB => Instruction::from("IN A, (*)", 2, 11, 0, 0xDB),
             0xDC => Instruction::from("CALL C, **", 3, 17, 10, 0xDC),
-            0xDD => match next_op {
+            0xDD => match cpu.next_opcode {
                 0x09 => Instruction::from("ADD IX, BC", 2, 15, 0, 0xDD09),
                 0x19 => Instruction::from("ADD IX, DE", 2, 15, 0, 0xDD19),
                 0x21 => Instruction::from("LD IX, **", 4, 14, 0, 0xDD21),
@@ -658,11 +671,14 @@ impl Instruction {
                 0xE5 => Instruction::from("PUSH IX", 2, 15, 0, 0xDDE5),
                 0xE9 => Instruction::from("JP (IX)", 2, 8, 0, 0xDDE9),
                 0xF9 => Instruction::from("LD SP, IX", 2, 10, 0, 0xDDF9),
-                _ => panic!("Unknown DD opcode:{:02x}{:02x}", opcode, next_op),
+                _ => panic!(
+                    "Unknown DD opcode:{:02x}{:02x}",
+                    cpu.opcode, cpu.next_opcode
+                ),
             },
             // TODO FIX
             0xDDCB => {
-                match next_op {
+                match cpu.next_opcode {
                     // IX BIT INstructions (DDCB)
                     0x00 => Instruction::from("RLC (IX+*), B", 4, 23, 0, 0x00),
                     0x01 => Instruction::from("RLC (IX+*), C", 4, 23, 0, 0x01),
@@ -938,7 +954,7 @@ impl Instruction {
             0xEA => Instruction::from("JP PE, **", 3, 10, 0, 0xEA),
             0xEB => Instruction::from("EX DE, HL", 1, 4, 0, 0xEB),
             0xEC => Instruction::from("CALL PE, **", 3, 17, 10, 0xEC),
-            0xED => match next_op {
+            0xED => match cpu.next_opcode {
                 // TODO Extended instructions
                 0xB0 => Instruction::from("LDIR", 2, 21, 16, 0xEDB0),
                 0x40 => Instruction::from("IM 0/1", 2, 8, 0, 0xED5E),
@@ -967,7 +983,7 @@ impl Instruction {
                 0x7E => Instruction::from("IM 2", 2, 8, 0, 0xED7E),
                 0x7A => Instruction::from("ADC HL, SP", 2, 15, 0, 0xED7A),
                 0x7B => Instruction::from("LD SP, (**)", 4, 20, 0, 0xED7B),
-                _ => panic!("Unknown opcode:{:02X}{:02X}", opcode, next_op),
+                _ => panic!("Unknown opcode:{:02X}{:02X}", cpu.opcode, cpu.next_opcode),
             },
             0xEE => Instruction::from("XOR *", 2, 7, 0, 0xEE),
             0xEF => Instruction::from("RST 28H", 1, 11, 0, 0xEF),
@@ -984,7 +1000,7 @@ impl Instruction {
             0xFA => Instruction::from("JP M, **", 3, 10, 0, 0xFA),
             0xFB => Instruction::from("EI", 1, 4, 0, 0xFB),
             0xFC => Instruction::from("CALL M, **", 3, 17, 10, 0xFC),
-            0xFD => match next_op {
+            0xFD => match cpu.next_opcode {
                 0x09 => Instruction::from("ADD IY, BC", 2, 15, 0, 0xFD09),
                 0x19 => Instruction::from("ADD IY, **", 2, 15, 0, 0xFD19),
                 0x21 => Instruction::from("LD IY, **", 4, 14, 0, 0xFD21),
@@ -994,22 +1010,42 @@ impl Instruction {
                 0x39 => Instruction::from("ADD IY, **", 2, 15, 0, 0xFD39),
                 0x66 => Instruction::from("LD H, (IY+*)", 3, 19, 0, 0xFD66),
                 0x6E => Instruction::from("LD L, IY+*", 3, 19, 0, 0xFD6E),
-
                 0x7E => Instruction::from("LD A, (IY+*)", 3, 19, 0, 0xFD7E),
+                0x84 => Instruction::from("ADD A, IYH", 2, 8, 0, 0xFD84),
+                0x85 => Instruction::from("ADD A, IYL", 2, 8, 0, 0xFD85),
+                0x86 => Instruction::from("ADD A, (IY+*)", 2, 8, 0, 0xFD85),
+                0x8C => Instruction::from("ADC A, IXH", 2, 8, 0, 0xFD8C),
+                0x8D => Instruction::from("ADC A, IXL", 2, 8, 0, 0xFD8D),
+                0x8E => Instruction::from("ADC A, (IX+*)", 2, 8, 0, 0xFD8E),
+                0x94 => Instruction::from("SUB IYH", 2, 8, 0, 0xFD94),
+                0x95 => Instruction::from("SUB IYL", 2, 8, 0, 0xFD95),
+                0x96 => Instruction::from("SUB (IX+*))", 3, 19, 0, 0xFD96),
+                0x9C => Instruction::from("SBC IYH", 2, 8, 0, 0xFD9C),
+                0x9D => Instruction::from("SBC IYL", 2, 8, 0, 0xFD9D),
+                0x9E => Instruction::from("SBC A, (IY+*)", 3, 19, 0, 0xFD9E),
+                0xA4 => Instruction::from("AND A, IYH", 2, 8, 0, 0xFDA4),
+                0xA5 => Instruction::from("AND A, IYL", 2, 8, 0, 0xFDA5),
+                0xA6 => Instruction::from("AND A, (IX+*)", 3, 19, 0, 0xFDA6),
+                0xAC => Instruction::from("XOR IYH", 2, 8, 0, 0xFDAC),
+                0xAD => Instruction::from("XOR IYL", 2, 8, 0, 0xFDAD),
+                0xAE => Instruction::from("XOR (IY+*)", 3, 19, 0, 0xFDAE),
+                0xB4 => Instruction::from("OR IYH", 2, 8, 0, 0xFDB4),
+                0xB5 => Instruction::from("OR IYL", 2, 8, 0, 0xFDB5),
+                0xB6 => Instruction::from("OR (IY+*)", 3, 19, 0, 0xFDB6),
+                0xBC => Instruction::from("CP IYH", 2, 8, 0, 0xFDBC),
+                0xBD => Instruction::from("CP IYL", 2, 8, 0, 0xFDBD),
+                0xBE => Instruction::from("CP (IY+*)", 3, 19, 0, 0xFDBE),
                 0xE1 => Instruction::from("POP IY", 2, 14, 0, 0xFDE1),
                 0xE5 => Instruction::from("PUSH IY", 2, 15, 0, 0xFDE5),
                 0xE9 => Instruction::from("SUB IYH", 2, 8, 0, 0xFDE9),
-                _ => panic!("Unknown opcode:{:02x}{:02x}", opcode, next_op),
+                _ => panic!("Unknown opcode:{:02x}{:02x}", cpu.opcode, cpu.next_opcode),
             },
             0xFE => Instruction::from("CP *", 2, 7, 0, 0xFE),
             0xFF => Instruction::from("RST 38H", 1, 11, 0, 0xFF),
-            _ => Instruction {
-                name: "Unknown".to_string(),
-                bytes: 0,
-                cycles: 0,
-                alt_cycles: 0,
-                opcode,
-            },
+            _ => {
+                Instruction::print_disassembly(cpu);
+                unimplemented!("Instruction Info: Unknown or unimplemented");
+            }
         })
     }
 }

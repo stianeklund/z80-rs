@@ -36,7 +36,8 @@ mod tests {
     #[test]
     #[ignore] // Ignored for now as they do not pass
     fn z80_precise() {
-        assert_eq!(exec_test("tests/zexdoc.com"), 46734978649);
+        // assert_eq!(exec_test("tests/zexdoc.com"), 46734978649);
+        assert_eq!(exec_test("tests/zexdoc.cim"), 46734978649);
         // ^ Bug in LDA_IM ?
         // assert_eq!(exec_test("tests/zexall.com"), 46734978649);
     }

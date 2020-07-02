@@ -3,3 +3,7 @@ name = "z80-rs"
 version = "0.1.0"
 authors = ["Stian Eklund <stian.eklund@gmail.com>"]
 edition = "2018"
+
+# Optimize tests for speed
+[profile.test]
+opt-level = 3
