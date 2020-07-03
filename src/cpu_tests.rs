@@ -70,10 +70,13 @@ mod tests {
         // All test binaries start at 0x0100.
         i.cpu.reg.pc = 0x0100;
         let mut reset_counter = 0;
+        // Turn CPM Compatibility on. This turns off any memory mapping
+        i.cpu.cpm_compat = true;
 
         loop {
-            // Turn CMP Compatibility on. This turns off any memory mapping
+            // Turn CPM Compatibility on. This turns off any memory mapping
             i.cpu.cpm_compat = true;
+
             // i.cpu.debug = true;
             i.run_tests();
 

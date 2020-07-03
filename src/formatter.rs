@@ -27,8 +27,8 @@ impl Debug for Cpu {
         write!(fmt, "SP: {:>04X}, ", self.reg.sp)?;
         write!(fmt, "IX: {:>04X}, ", self.reg.ix)?;
         write!(fmt, "IY: {:>04X}, ", self.reg.iy)?;
-        write!(fmt, "I: {:02X}, ", self.int.int as u8)?;
-        write!(fmt, "R: {:02X}\t", self.reg.r as u8)?;
+        write!(fmt, "I: {:02X}, ", self.reg.i)?;
+        write!(fmt, "R: {:02X}\t", self.reg.r)?;
         write!(
             fmt,
             "({:02X} {:02X} {:02X} {:02X}), ",
@@ -67,7 +67,7 @@ impl Display for Cpu {
         write!(fmt, "P:{} ", self.flags.pf as u8)?;
         write!(fmt, "C:{} ", self.flags.cf as u8)?;
         write!(fmt, "H:{} ", self.flags.hf as u8)?;
-        write!(fmt, "I:{} ", self.int.int as u8)?;
+        write!(fmt, "I:{} ", self.reg.i as u8)?;
         write!(fmt, "Cycles:{}", self.cycles)
     }
 }
