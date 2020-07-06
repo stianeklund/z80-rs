@@ -48,12 +48,22 @@ Jump to 0 from 032F
 #### Zexall
 
 ```
-Does not pass.
+*Does not pass.
+
+* See Zexdoc
 ```
 #### Zexdoc
 
 ```
-Does not pass.
+Test loaded: "tests/zexdoc.com" Bytes: 8588
+
+Z80doc instruction exerciser
+<adc,sbc> hl,<bc,de,hl,sp>....  OK
+add hl,<bc,de,hl,sp>..........  OK
+add ix,<bc,de,ix,sp>..........  OK
+add iy,<bc,de,iy,sp>..........  OK
+aluop a,nn....................  ERROR **** crc expected:48799360 found:932ac8f0
+^ The rest does not pass
 ```
 --- 
 

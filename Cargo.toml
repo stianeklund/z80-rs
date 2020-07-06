@@ -5,6 +5,6 @@ authors = ["Stian Eklund <stian.eklund@gmail.com>"]
 edition = "2018"
 
 # Optimize tests for speed
-[profile.test]
-opt-level = 3
-lto = true
+#[profile.test]
+# opt-level = 3
+#lto = true

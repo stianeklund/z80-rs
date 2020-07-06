@@ -1,4 +1,5 @@
 use super::cpu::Cpu;
+use crate::instruction_info::Instruction;
 
 pub struct Interconnect {
     pub cpu: Cpu,
@@ -33,6 +34,21 @@ impl Interconnect {
     }
 
     pub fn run_tests(&mut self) {
-        self.cpu.execute();
+        self.cpu.fetch();
+        if self.cpu.debug {
+            self.debug_decode();
+        }
+        self.cpu.decode(self.cpu.opcode);
+    }
+    fn debug_decode(&mut self) {
+        self.cpu.instruction = Instruction::decode(&self.cpu)
+            .expect(format!("Unknown opcode:{:04X}", self.cpu.opcode).as_str());
+
+        if self.cpu.instruction.name.to_string().len() < 1 {
+            self.cpu.current_instruction = format!("{:w$}", self.cpu.current_instruction, w = 12);
+        } else {
+            self.cpu.current_instruction = self.cpu.instruction.name.to_string();
+        }
+        println!("{:#?}", self.cpu);
     }
 }
