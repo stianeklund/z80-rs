@@ -36,9 +36,8 @@ mod tests {
     #[test]
     #[ignore] // Ignored for now as they do not pass
     fn z80_precise() {
-        // assert_eq!(exec_test("tests/zexdoc.com"), 46734978649);
-        assert_eq!(exec_test("tests/zexdoc.cim"), 46734978649);
-        // ^ Bug in LDA_IM ?
+        assert_eq!(exec_test("tests/zexdoc.com"), 46734978649);
+        // assert_eq!(exec_test("tests/zexdoc.cim"), 46734978649);
         // assert_eq!(exec_test("tests/zexall.com"), 46734978649);
     }
 
@@ -47,8 +46,8 @@ mod tests {
         assert_eq!(exec_test("tests/prelim.com"), 8721);
         assert_eq!(exec_test("tests/8080PRE.COM"), 7772);
         assert_eq!(exec_test("tests/CPUTEST.COM"), 240551424);
-        assert_eq!(exec_test("tests/zexall.com"), 0);
-        assert_eq!(exec_test("tests/zexdoc.com"), 0);
+        assert_eq!(exec_test("tests/zexall.com"), 46734978649);
+        assert_eq!(exec_test("tests/zexdoc.com"), 46734978649);
     }
 
     fn exec_test(bin: &str) -> usize {
@@ -73,7 +72,7 @@ mod tests {
         let mut reset_counter = 0;
 
         loop {
-            // Turn CMP Compatability on. This turns off any memory mapping
+            // Turn CMP Compatibility on. This turns off any memory mapping
             i.cpu.cpm_compat = true;
             // i.cpu.debug = true;
             i.run_tests();
