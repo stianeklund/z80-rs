@@ -17,9 +17,9 @@ mod tests {
     fn test_hf_high_byte() {
         // The half carry flag should be set once we increment HL from 00FFh to 0000h
         let mut i = Interconnect::default();
-        i.cpu.write_pair_direct(BC, 1); // Set BC to 1 (we will increment HL by 1)
+        i.cpu.write_reg_pair(BC, 1); // Set BC to 1 (we will increment HL by 1)
         i.cpu.reg.a = 0xff;
-        i.cpu.write_pair_direct(HL, 0x00FF);
+        i.cpu.write_reg_pair(HL, 0x00FF);
         i.cpu.add_hl(BC);
         i.cpu.inc(Register::A);
         assert_eq!(i.cpu.flags.hf, true);
@@ -34,7 +34,7 @@ mod tests {
     }
 
     #[test]
-    #[ignore] // Ignored for now as they do not pass
+    // #[ignore] // Ignored for now as they do not pass
     fn z80_precise() {
         assert_eq!(exec_test("tests/zexdoc.com"), 46734978649);
         // assert_eq!(exec_test("tests/zexdoc.cim"), 46734978649);
