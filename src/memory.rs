@@ -1,3 +1,4 @@
+use crate::cpu::{Cpu, Registers};
 use std::fmt;
 use std::fs::File;
 use std::io::prelude::*;
@@ -49,9 +50,6 @@ impl Memory {
             rom: vec![0; 0x1_5000],
             ram: vec![0; 0x1_0000],
         }
-    }
-    pub fn peek(&self, v: usize) -> u8 {
-        self.rom[v]
     }
 
     pub fn load_bin(&mut self, rom: &[String]) {

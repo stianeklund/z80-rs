@@ -181,6 +181,7 @@ impl MemoryRW for Cpu {
         } else if addr == 0x5000 {
             self.int.int as u8
         } else if addr < 0x5000 {
+            println!("Reading from RAM");
             self.memory.ram[addr as usize - 0x4000]
         } else {
             self.memory.rom[addr as usize]
@@ -194,7 +195,7 @@ impl MemoryRW for Cpu {
 
     #[inline]
     fn write16(&mut self, addr: u16, word: u16) {
-        self.write8(addr, word as u8);
+        self.write8(addr, (word & 0xFF) as u8);
         self.write8(addr.wrapping_add(1), (word >> 8) as u8);
     }
 
@@ -252,14 +253,14 @@ impl Cpu {
             IYL => (self.reg.iy & 0xFF) as u8,
 
             // We only use HL here indexed in memory anyways..
-            HL => self.read8(self.read_pair(HL)),
+            HL => self.memory[self.read_pair(HL)],
             IxIm => {
-                let byte = self.read8(self.reg.pc.wrapping_add(1)) as i8;
-                self.read8(self.reg.ix.wrapping_add(byte as u16))
+                let offset = self.read8(self.reg.pc.wrapping_add(1)) as i8;
+                self.read8(self.reg.ix.wrapping_add(offset as u16))
             }
             IyIm => {
-                let byte = self.read8(self.reg.pc.wrapping_add(1)) as i8;
-                self.read8(self.reg.iy.wrapping_add(byte as u16))
+                let offset = self.read8(self.reg.pc.wrapping_add(1)) as i8;
+                self.read8(self.reg.ix.wrapping_add(offset as u16))
             }
             _ => {
                 println!(
@@ -287,11 +288,17 @@ impl Cpu {
             R => self.reg.r = value,
             HL => self.write8(self.read_pair(HL), value), // HL is only used indexed to memory
             IXH => self.reg.ix = (self.reg.ix & 0x00FF) | ((value as u16) << 8),
-            IXL => self.reg.ix = (self.reg.ix & 0xFF00)   | value as u16,
+            IXL => self.reg.ix = (self.reg.ix & 0xFF00) | value as u16,
             IYH => self.reg.iy = (self.reg.iy & 0x00FF) | ((value as u16) << 8) as u16,
-            IYL => self.reg.iy = (self.reg.iy & 0xFF00)   | value as u16,
-            IxIm => self.write8(self.reg.ix + self.read8(self.reg.pc + 1) as u16, value),
-            IyIm => self.write8(self.reg.iy + self.read8(self.reg.pc + 1) as u16, value),
+            IYL => self.reg.iy = (self.reg.iy & 0xFF00) | value as u16,
+            IxIm => {
+                let byte = self.read8(self.reg.pc + 1) as i8;
+                self.write8(self.reg.iy.wrapping_add(byte as u16), value)
+            },
+            IyIm => {
+                let byte = self.read8(self.reg.pc + 1) as i8;
+                self.write8(self.reg.iy.wrapping_add(byte as u16), value)
+            },
             _ => panic!(format!(
                 "Writing to RP: {:#?}, is not supported by write_reg, called by: {}, opcode:{:02X}{:02X}",
                 reg, self.current_instruction, self.opcode, self.next_opcode
@@ -682,7 +689,10 @@ impl Cpu {
                 self.adv_pc(1);
                 u16::from(self.read_reg(src))
             }
-            IxIm | IyIm => self.read_reg(src) as u16,
+            IxIm | IyIm => {
+                self.adv_pc(1);
+                self.read_reg(src) as u16
+            }
             BC | DE | HL => self.read_pair(src),
             _ => panic!("Non handled LD source"),
         };
@@ -694,9 +704,16 @@ impl Cpu {
                     value = self.read8(self.read_pair(src)) as u16;
                     self.adv_cycles(3);
                 } else if src == IxIm || src == IyIm {
-                    value = self.read_reg(src) as u16;
-                    self.adv_pc(2);
+                    let offset = self.read8(self.reg.pc + 1) as i8;
+                    self.adv_pc(1);
                     self.adv_cycles(15);
+                    let addr: u16 = if src == IxIm {
+                        self.reg.ix.wrapping_add(offset as u16)
+                    } else {
+                        self.reg.iy.wrapping_add(offset as u16)
+                    };
+                    let byte = self.read8(addr);
+                    value = byte as u16;
                 } else if (src == R) || (src == I) {
                     self.flags.sf = (self.reg.a & 0x80) != 0;
                     self.flags.zf = self.reg.a == 0;
@@ -725,9 +742,16 @@ impl Cpu {
                 self.adv_cycles(4);
             }
             IxIm | IyIm => {
-                self.write_reg(dst, value as u8);
-                self.adv_pc(2);
+                self.adv_pc(1);
+                let offset = self.read8(self.reg.pc + 1) as i8;
+                let value = self.reg.ix.wrapping_add(offset as u16) as u8;
+                println!("LD writing to DST:{:#?}, with:{:02x}", dst, value);
+                self.write_reg(dst, value);
                 self.adv_cycles(15);
+                self.adv_pc(1);
+                // self.write_reg(dst, value as u8);
+                // self.adv_pc(1);
+                // self.adv_cycles(15);
             }
             _ => panic!("Unhandled LD register"),
         }
@@ -738,10 +762,11 @@ impl Cpu {
     // Transfers a byte of data from the memory location pointed to by hl to the memory location
     // pointed to by DE
     // Then HL and DE are incremented and BC decremented.
+    // YF and XF are copies of bit 1 of n and bit 3 of n respectively.
     fn ldi(&mut self) {
-        // YF and XF are copies of bit 1 of n and bit 3 of n respectively.
+        // read_reg grabs the value of HL indexed in memory
         let hl = self.read8(self.read_pair(HL));
-        self.write8(self.read_pair(DE), hl as u8);
+        self.write8(self.read_pair(DE), hl);
         let n = hl.wrapping_add(self.reg.a);
 
         self.write_pair(HL, self.read_pair(HL).wrapping_add(1));
@@ -759,7 +784,6 @@ impl Cpu {
 
     // 0xEDB0 Extended instruction
     fn ldir(&mut self) {
-        // LDIR is basically LDI + BC if BC is not 0 decrease PC by 2.
         self.ldi();
         if self.read_pair(BC) != 0 {
             self.reg.prev_pc = self.reg.pc;
@@ -776,25 +800,37 @@ impl Cpu {
     // Stores (REGPAIR) into the memory loc pointed to by **
     // TODO & LOAD INDIRECT BUG?
     fn ld_mem_nn_rp(&mut self, reg: Register) {
-        let ptr = self.read16(self.reg.pc + 2);
+        let ptr = if reg == HL {
+            self.read16(self.reg.pc + 1)
+        } else {
+            self.read16(self.reg.pc + 2)
+        };
         self.write16(ptr, self.read_pair(reg));
-        self.adv_cycles(20);
-        self.adv_pc(4);
+        if reg == HL {
+            self.adv_pc(2);
+            self.adv_cycles(16);
+        } else {
+            self.adv_cycles(20);
+            self.adv_pc(4);
+        }
     }
 
-    // Extended instructions: ex: LD HL, (**)
+    // Extended instructions: ex: LD HL, (**) LD SP, (**)
     // 0xED6B, 0xED5B etc..
     // Loads the value pointed to by ** into (REGPAIR)
     fn ld_rp_mem_nn(&mut self, reg: Register) {
-        let word = self.read16(self.reg.pc + 2);
-        self.write_pair(reg, self.read16(word));
+        self.adv_pc(2);
+        let word = self.read16(self.reg.pc);
+        let value = self.read16(word);
+        self.write_pair(reg, value);
         self.adv_cycles(20);
-        self.adv_pc(4);
+        self.adv_pc(2);
     }
 
     // Load Register Pair Immediate
     // LXI H, 2000H (2000H is stored in HL & acts as as memory pointer)
     #[inline]
+    // LD RP **
     fn ld_rp_nn(&mut self, reg: Register) {
         if reg == IX || reg == IY {
             self.adv_cycles(4);
@@ -810,20 +846,21 @@ impl Cpu {
     // Store Accumulator direct
     fn ld_nn_r(&mut self) {
         let imm = self.read16(self.reg.pc + 1);
+        self.adv_pc(3);
         self.write8(imm, self.reg.a);
         self.adv_cycles(13);
-        self.adv_pc(3);
     }
 
     #[inline]
     fn call(&mut self, addr: u16) {
         let ret: u16 = self.reg.pc.wrapping_add(3);
         self.reg.prev_pc = self.reg.pc;
-        self.memory[self.reg.sp.wrapping_sub(1)] = (ret >> 8) as u8;
+        // self.memory[self.reg.sp.wrapping_sub(1)] = (ret >> 8) as u8;
         // Low order byte
-        self.memory[self.reg.sp.wrapping_sub(2)] = ret as u8;
+        // self.memory[self.reg.sp.wrapping_sub(2)] = ret as u8;
         // Push return address to stack
         self.reg.sp = self.reg.sp.wrapping_sub(2);
+        self.write16(self.reg.sp, ret);
         match addr {
             0xCC | 0xCD | 0xC4 | 0xD4 | 0xDC | 0xE4 | 0xEC | 0xF4 | 0xFC | 0x66 => {
                 self.reg.pc = self.read16(self.reg.pc + 1);
@@ -961,18 +998,14 @@ impl Cpu {
     }
 
     fn cpdr(&mut self) {
-        self.cpd();
-        if self.read_pair(BC) != 0 && !self.flags.zf {
-            self.reg.prev_pc = self.reg.pc;
-            self.reg.pc = self.reg.pc.wrapping_sub(2);
-            self.adv_cycles(5);
-        }
-        if self.read_pair(BC) <= 0 {
-            self.reg.r = (self.reg.r & 0x80) | (self.reg.r.wrapping_add(0) as u8 & 0x7f);
-        }
+        self.cpir();
+        self.write_pair(HL, self.read_pair(HL).wrapping_sub(2))
     }
     // Decrement memory or register
     fn dec(&mut self, reg: Register) {
+        if reg == IxIm || reg == IyIm {
+            self.adv_pc(1);
+        }
         let result: u16 = match reg {
             A | B | C | D | E | H | L | HL | IXH | IXL | IYH | IYL | IxIm | IyIm => {
                 self.write_reg(reg, self.read_reg(reg).wrapping_sub(1));
@@ -984,7 +1017,7 @@ impl Cpu {
             HL => self.adv_cycles(5),
             IxIm | IyIm => {
                 self.adv_cycles(19);
-                self.adv_pc(2);
+                self.adv_pc(1);
             }
             IXH | IXL | IYH | IYL => {
                 self.adv_pc(1);
@@ -1197,23 +1230,37 @@ impl Cpu {
         }
     }
 
-    // Move Immediate Data
+    // LD (RP), *
     fn mvi(&mut self, reg: Register) {
         // The MVI instruction uses a 8-bit data quantity, as opposed to
         // LXI which uses a 16-bit data quantity.
-        let value = self.read8(self.reg.pc + 1);
+        // let value = self.read8(self.reg.pc + 1);
         match reg {
             IXH | IXL | IYL | IYH => {
-                self.write_reg(reg, value);
                 self.adv_cycles(4);
+                self.adv_pc(1);
+                self.write_reg(reg, self.read8(self.reg.pc + 1));
+            }
+            IyIm | IxIm => {
+                // First increment of PC should be automatic with the read or something..
+                // Second increment is OK, we can
+                self.adv_pc(1);
+                let offset = self.read8(self.reg.pc + 1) as i8;
+                let addr = if reg == IxIm {
+                    self.reg.ix.wrapping_add(offset as u16)
+                } else {
+                    self.reg.iy.wrapping_add(offset as u16)
+                };
+                self.write8(addr, self.read8(self.reg.pc + 2));
+                self.adv_cycles(12);
                 self.adv_pc(1);
             }
             HL => {
                 self.adv_cycles(3);
                 let hl = self.read_pair(HL);
-                self.memory[hl] = value;
+                self.write8(hl, self.read8(self.reg.pc + 1));
             }
-            _ => self.write_reg(reg, value),
+            _ => self.write_reg(reg, self.read8(self.reg.pc + 1)),
         }
 
         self.adv_cycles(7);
@@ -1228,24 +1275,38 @@ impl Cpu {
         self.adv_pc(3);
     }
 
-    // LD (Load register with value of RP indexed in memory
-    fn ld_reg_mem_rp(&mut self, reg: Register) {
-        self.reg.a = self.read8(self.read_pair(reg));
-        self.adv_cycles(7);
-        self.adv_pc(1);
-    }
-
+    // LD RP (**)
     fn lhld(&mut self, reg: Register) {
         // Load the HL register with 16 bits found at addr & addr + 1
-        let imm = self.read16(self.reg.pc + 1);
-        self.write_pair(reg, self.read16(imm));
-        self.adv_cycles(16);
+
+        // let addr = next_word(); <-- nextw is pc+=2 rw(pc-2);
+        // set_hl(rw(addr);
+        // ADDR should be 0103 (byte sequence is: FB 2A 03 01 2A 03 01 22
+        let addr: u16 = if reg == HL {
+            self.read16(self.reg.pc + 1)
+        } else {
+            self.read16(self.reg.pc + 2)
+        };
+
+        self.write_pair(reg, self.read16(addr) as u16);
         self.adv_pc(3);
+        if reg == IX || reg == IY {
+            self.adv_pc(1);
+            self.adv_cycles(4);
+        }
+        self.adv_cycles(16);
     }
 
     pub(crate) fn inc(&mut self, reg: Register) {
+        if reg == IxIm || reg == IyIm {
+            self.adv_pc(1);
+        }
         let result = match reg {
-            A | B | C | D | E | H | L | HL | IxIm | IyIm | IXH | IXL | IYH | IYL => {
+            A | B | C | D | E | H | L | HL | IXH | IXL | IYH | IYL => {
+                self.write_reg(reg, self.read_reg(reg).wrapping_add(1));
+                self.read_reg(reg)
+            }
+            IxIm | IyIm => {
                 self.write_reg(reg, self.read_reg(reg).wrapping_add(1));
                 self.read_reg(reg)
             }
@@ -1254,7 +1315,7 @@ impl Cpu {
         match reg {
             HL => self.adv_cycles(7),
             IxIm | IyIm => {
-                self.adv_pc(2);
+                self.adv_pc(1);
                 self.adv_cycles(19);
             }
             IXH | IXL | IYH | IYL => {
@@ -1672,12 +1733,8 @@ impl Cpu {
 
     // Store H & L direct
     fn shld(&mut self, reg: Register) {
-        if reg == IX || reg == IY {
-            self.adv_pc(1);
-            self.adv_cycles(4);
-        }
-        let addr = self.read16(self.reg.pc + 1);
-        self.write16(addr, self.read_pair(reg));
+        let ptr = self.read16(self.reg.pc + 1);
+        self.write16(ptr, self.read_pair(reg));
         self.adv_cycles(16);
         self.adv_pc(3);
     }
@@ -1733,7 +1790,7 @@ impl Cpu {
             0x18 => self.jr(self.read8(self.reg.pc) as i16),
             0x19 => self.add_hl(DE),
 
-            0x1A => self.ld_reg_mem_rp(DE),
+            0x1A => self.ld(A, DE),
             0x1B => self.dec_rp(DE),
             0x1C => self.inc(E),
             0x1D => self.dec(E),
@@ -1742,6 +1799,7 @@ impl Cpu {
 
             0x20 => self.jr_cond(!self.flags.zf),
             0x21 => self.ld_rp_nn(HL),
+            // 0x22 => self.ld_mem_nn_rp(HL),
             0x22 => self.shld(HL),
             0x23 => self.inc_rp(HL),
             0x24 => self.inc(H),
@@ -1750,7 +1808,6 @@ impl Cpu {
             0x27 => self.daa(),
             0x28 => self.jr_cond(self.flags.zf),
             0x29 => self.add_hl(HL),
-
             0x2A => self.lhld(HL),
             0x2B => self.dec_rp(HL),
             0x2C => self.inc(L),
@@ -1847,7 +1904,7 @@ impl Cpu {
             0x7B => self.ld(A, E),
             0x7C => self.ld(A, H),
             0x7D => self.ld(A, L),
-            0x7E => self.ld_reg_mem_rp(HL),
+            0x7E => self.ld(A, HL),
             0x7F => self.ld(A, A),
 
             // ADD Instructions
@@ -2189,31 +2246,20 @@ impl Cpu {
                     0x09 => self.add_rp(IX, BC),
                     0x19 => self.add_rp(IX, DE),
                     0x21 => self.ld_rp_nn(IX),
-                    0x22 => self.shld(IX),
+                    0x22 => self.ld_mem_nn_rp(IX),
                     0x23 => self.inc_rp(IX),
                     0x24 => self.inc(IXH),
                     0x25 => self.dec(IXH),
                     0x26 => self.mvi(IXH),
                     0x29 => self.add_rp(IX, IX),
-                    0x2A => {
-                        self.lhld(IX);
-                        self.adv_cycles(4);
-                        self.adv_pc(1);
-                    }
+                    0x2A => self.lhld(IX),
                     0x2B => self.dec_rp(IX),
                     0x2C => self.inc(IXL),
                     0x2D => self.dec(IXL),
                     0x2E => self.mvi(IXL),
                     0x34 => self.inc(IxIm),
                     0x35 => self.dec(IxIm),
-                    0x36 => {
-                        self.write8(
-                            self.reg.ix + self.read8(self.reg.pc + 1) as u16,
-                            self.read8(self.reg.pc + 1),
-                        );
-                        self.adv_cycles(19);
-                        self.adv_pc(4);
-                    }
+                    0x36 => self.mvi(IxIm),
                     0x39 => self.add_rp(IX, SP),
                     0x3C => unimplemented!("{:04x}", self.next_opcode),
                     0x3D => unimplemented!("{:04x}", self.next_opcode),
@@ -2367,9 +2413,10 @@ impl Cpu {
                     0xB1 => self.cpir(),
                     0xB9 => self.cpdr(),
                     _ => unimplemented!(
-                        "Unimplemented ED instruction:{:02X}{:02X}",
+                        "Unimplemented ED instruction:{:02X}{:02X}{:02X}",
                         self.opcode,
-                        self.next_opcode
+                        self.next_opcode,
+                        self.read8(self.reg.pc + 1),
                     ),
                 }
             }
@@ -2397,20 +2444,12 @@ impl Cpu {
                     0x6F => self.ld(IYL, A),
                     0x19 => self.add_rp(IY, DE),
                     0x21 => self.ld_rp_nn(IY),
-                    0x22 => self.shld(IY),
+                    0x22 => self.ld_mem_nn_rp(IY),
+                    // 0x22 => self.shld(IY),
                     0x23 => self.inc_rp(IY),
-                    0x26 => {
-                        // self.ld(IYH, *)
-                        self.write_reg(IYH, self.read8(self.reg.pc + 1));
-                        self.adv_pc(3);
-                        self.adv_cycles(11);
-                    }
+                    0x26 => self.mvi(IYH),
                     0x29 => self.add_rp(IY, IY),
-                    0x2A => {
-                        self.lhld(IY);
-                        self.adv_cycles(4);
-                        self.adv_pc(1);
-                    }
+                    0x2A => self.lhld(IY),
                     0x2B => self.dec_rp(IY),
                     0x2E => self.mvi(IYL),
                     0x24 => self.inc(IYH),
@@ -2419,14 +2458,7 @@ impl Cpu {
                     0x2D => self.inc(IYL),
                     0x34 => self.inc(IyIm),
                     0x35 => self.dec(IyIm),
-                    0x36 => {
-                        self.write8(
-                            self.reg.iy + self.read8(self.reg.pc + 1) as u16,
-                            self.read8(self.reg.pc + 1),
-                        );
-                        self.adv_cycles(19);
-                        self.adv_pc(4);
-                    }
+                    0x36 => self.mvi(IyIm),
                     0x39 => self.add_rp(IY, SP),
                     0x44 => self.ld(B, IYH),
                     0x45 => self.ld(B, IYL),
