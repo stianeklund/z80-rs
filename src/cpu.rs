@@ -260,15 +260,13 @@ impl Cpu {
             }
             IyIm => {
                 let offset = self.read8(self.reg.pc.wrapping_add(1)) as i8;
-                self.read8(self.reg.ix.wrapping_add(offset as u16))
+                self.read8(self.reg.iy.wrapping_add(offset as u16))
             }
             _ => {
                 println!(
                     "Called by:{}, Opcode:{:02X}",
                     self.current_instruction, self.opcode
                 );
-                eprintln!("Instruction:{:?}", Instruction::decode(self));
-                eprintln!("{:#?}", Instruction::print_disassembly(self));
                 panic!("Register not supported:{:#?}", reg)
             }
         }
@@ -293,7 +291,7 @@ impl Cpu {
             IYL => self.reg.iy = (self.reg.iy & 0xFF00) | value as u16,
             IxIm => {
                 let byte = self.read8(self.reg.pc + 1) as i8;
-                self.write8(self.reg.iy.wrapping_add(byte as u16), value)
+                self.write8(self.reg.ix.wrapping_add(byte as u16), value)
             },
             IyIm => {
                 let byte = self.read8(self.reg.pc + 1) as i8;
@@ -681,12 +679,17 @@ impl Cpu {
     }
 
     #[inline]
-    fn ld(&mut self, dst: Register, src: Register) {
+    pub(crate) fn ld(&mut self, dst: Register, src: Register) {
         let mut value: u16 = match src {
             A | B | C | D | E | H | L | I | R => u16::from(self.read_reg(src)),
             IXL | IYL | IXH | IYH => {
                 self.adv_cycles(4);
                 self.adv_pc(1);
+                // TODO fix this, in the case of LD IXH, IXH we increment 1 and use 4 cycles too many
+                if dst == IXL || dst == IXH || dst == IYL || dst == IYH {
+                    self.reg.pc = self.reg.pc.wrapping_sub(1);
+                    self.cycles = self.cycles.wrapping_sub(4);
+                }
                 u16::from(self.read_reg(src))
             }
             IxIm | IyIm => {
@@ -743,15 +746,22 @@ impl Cpu {
             }
             IxIm | IyIm => {
                 self.adv_pc(1);
+                // Get memory IX or IY + * displaced location
                 let offset = self.read8(self.reg.pc + 1) as i8;
-                let value = self.reg.ix.wrapping_add(offset as u16) as u8;
-                println!("LD writing to DST:{:#?}, with:{:02x}", dst, value);
-                self.write_reg(dst, value);
+                let value = match dst {
+                    IxIm => self.reg.ix.wrapping_add(offset as u16) as u8,
+                    IyIm => self.reg.iy.wrapping_add(offset as u16) as u8,
+                    _ => panic!("LD unknown destination:{:#?}", dst),
+                };
+                match src {
+                    A | B | C | D | E | H | L => self.write8(value as u16, self.read_reg(src)),
+                    IxIm | IyIm => self.write_reg(dst, value),
+                    _ => panic!("LD IXIM / IYIM unknown source:{:#?}", src),
+                }
+
+                // self.write_reg(dst, value);
                 self.adv_cycles(15);
                 self.adv_pc(1);
-                // self.write_reg(dst, value as u8);
-                // self.adv_pc(1);
-                // self.adv_cycles(15);
             }
             _ => panic!("Unhandled LD register"),
         }
@@ -785,6 +795,23 @@ impl Cpu {
     // 0xEDB0 Extended instruction
     fn ldir(&mut self) {
         self.ldi();
+        if self.read_pair(BC) != 0 {
+            self.reg.prev_pc = self.reg.pc;
+            self.reg.pc = self.reg.pc.wrapping_sub(2);
+            self.adv_cycles(5);
+        }
+        if self.read_pair(BC) <= 0 {
+            self.reg.r = (self.reg.r & 0x80) | (self.reg.r.wrapping_add(0) as u8 & 0x7f);
+        }
+    }
+    // Same as LDI but HL & DE are also decremented
+    fn ldd(&mut self) {
+        self.ldi();
+        self.write_pair(HL, self.read_pair(HL).wrapping_sub(2));
+        self.write_pair(DE, self.read_pair(DE).wrapping_sub(2));
+    }
+    fn lddr(&mut self) {
+        self.ldd();
         if self.read_pair(BC) != 0 {
             self.reg.prev_pc = self.reg.pc;
             self.reg.pc = self.reg.pc.wrapping_sub(2);
@@ -955,12 +982,6 @@ impl Cpu {
     }
     // Extended instruction
     fn cpi(&mut self) {
-        // TODO
-        // Compares the value of the memory location pointed to by HL with A.
-        // HL is then incremented and BC is decremented.
-        // S,Z,H from (A - (HL) ) as in CP (HL)
-        // F3 is bit 3 of (A - (HL) - H), H as in F after instruction
-        // F5 is bit 1 of (A - (HL) - H), H as in F after instruction
         let value = self.read8(self.read_pair(HL));
         let result = (self.reg.a as u16).wrapping_sub(value as u16);
         let overflow = (self.reg.a as i8).overflowing_sub(value as i8).1;
@@ -1135,6 +1156,85 @@ impl Cpu {
         self.adv_pc(2);
         self.adv_cycles(8);
     }
+
+    fn rrd(&mut self) {
+        // Get (HL) memory indexed value
+        let value = self.read_reg(HL);
+        let a = self.reg.a;
+        // Copy the contents of the low order nibble of HL to the low order nibble of A
+        // The previous contents should be copied to the highe-order nibble of (HL).
+        self.reg.a = (a & 0xF0) | (value & 0x0F);
+        self.write8(self.read_pair(HL), (value << 4) | (a & 0xF));
+
+        self.flags.nf = false;
+        self.flags.hf = false;
+        self.flags.yf = (a & 0x20) != 0;
+        self.flags.xf = (a & 0x08) != 0;
+        self.flags.pf = self.parity(value as u8);
+        self.adv_pc(2);
+        self.adv_cycles(18);
+    }
+    fn rld(&mut self) {
+        // The contents of the low order nibble of (HL) are copied to the high-order nibble of (HL)
+        // The previous content is copied to the low-order nibble of A and the previous content
+        // is copied to the low order nibble of (HL).
+        let a = self.reg.a;
+        let value = self.read_reg(HL);
+        self.reg.a = (a & 0xF0) | (value >> 4);
+        self.write8(self.read_pair(HL), (value << 4) | (a & 0xF));
+
+        self.flags.sf = (self.reg.a & 0x80) != 0;
+        self.flags.zf = self.reg.a == 0;
+        self.flags.pf = self.parity(self.reg.a);
+        self.flags.yf = (a & 0x20) != 0;
+        self.flags.xf = (a & 0x08) != 0;
+        self.flags.nf = false;
+        self.flags.hf = false;
+        self.flags.pf = self.parity(self.reg.a as u8);
+        self.adv_pc(2);
+        self.adv_cycles(18);
+    }
+
+    // The contents of reg is rotated left one bit position.
+    // The contents of bit 7 are copied to the carry flag and the previous contents of the carry
+    // flag are copied to bit 0
+    fn rl(&mut self, reg: Register) {
+        let cf = self.flags.cf;
+        self.flags.cf = self.read_reg(reg) >> 7 != 0;
+        let value = (self.read_reg(reg) << 1) | cf as u8;
+        self.write_reg(reg, value);
+
+        self.flags.nf = false;
+        self.flags.hf = false;
+        self.flags.yf = (value & 0x20) != 0;
+        self.flags.xf = (value & 0x08) != 0;
+        self.flags.cf = (value & 0x80) != 0;
+        self.flags.pf = self.parity(value as u8);
+        self.adv_pc(2);
+        self.adv_cycles(8);
+        if reg == HL {
+            self.adv_cycles(7);
+        }
+    }
+    fn rr(&mut self, reg: Register) {
+        let cf = self.flags.cf;
+        self.flags.cf = self.read_reg(reg) >> 7 != 0;
+        let value = (self.read_reg(reg) >> 1) | cf as u8;
+        self.write_reg(reg, value);
+
+        self.flags.nf = false;
+        self.flags.hf = false;
+        self.flags.yf = (value & 0x20) != 0;
+        self.flags.xf = (value & 0x08) != 0;
+        self.flags.cf = (value & 0x80) != 0;
+        self.flags.pf = self.parity(value as u8);
+        self.adv_pc(2);
+        self.adv_cycles(8);
+        if reg == HL {
+            self.adv_cycles(7);
+        }
+    }
+
     // Extended instruction 0xCB03
     fn rlc(&mut self, reg: Register) {
         let value = match reg {
@@ -1158,7 +1258,7 @@ impl Cpu {
         self.flags.yf = (value & 0x20) != 0;
         self.flags.xf = (value & 0x08) != 0;
         self.flags.cf = (value & 0x80) != 0;
-        self.parity(value as u8);
+        self.flags.pf = self.parity(value as u8);
         self.adv_pc(2);
         self.adv_cycles(8);
     }
@@ -1178,7 +1278,7 @@ impl Cpu {
             self.flags.yf = (value & 0x20) != 0;
             self.flags.xf = (value & 0x08) != 0;
             self.flags.cf = (value & 0x80) != 0;
-            self.parity(value as u8);
+            self.flags.pf = self.parity(value as u8);
             self.adv_pc(4);
             self.adv_cycles(23);
         }
@@ -1217,6 +1317,95 @@ impl Cpu {
         self.flags.hf = false;
         self.adv_cycles(4);
         self.adv_pc(1);
+    }
+
+    fn sla(&mut self, reg: Register) {
+        let value = self.read_reg(reg);
+        self.flags.cf = value >> 7 != 0;
+        let result = value >> 1;
+        // Write shifted register value
+        self.write_reg(reg, result);
+
+        self.flags.sf = (result & 0x80) != 0;
+        self.flags.zf = result == 0;
+        self.flags.pf = self.parity(value);
+        self.flags.yf = (value & 0x20) != 0;
+        self.flags.xf = (value & 0x08) != 0;
+        self.flags.nf = false;
+        self.flags.hf = false;
+        self.flags.pf = self.parity(value as u8);
+        if reg == HL {
+            self.adv_cycles(7);
+        }
+        self.adv_cycles(8);
+        self.adv_pc(2);
+    }
+
+    fn sll(&mut self, reg: Register) {
+        let value: u8 = self.read_reg(reg);
+        self.flags.cf = value >> 7 != 0;
+        // Write values back to register, we OR with 1 to set the first bit to 1
+        // http://www.z80.info/z80undoc.htm
+        self.write_reg(reg, value << 1);
+        self.write_reg(reg, value | 1);
+        let result = self.read_reg(reg);
+
+        self.flags.sf = (result & 0x80) != 0;
+        self.flags.zf = result == 0;
+        self.flags.pf = self.parity(value);
+        self.flags.yf = (value & 0x20) != 0;
+        self.flags.xf = (value & 0x08) != 0;
+        self.flags.nf = false;
+        self.flags.hf = false;
+        self.flags.pf = self.parity(value as u8);
+        if reg == HL {
+            self.adv_cycles(7);
+        }
+        self.adv_cycles(8);
+        self.adv_pc(2);
+    }
+
+    // SRA preserves sign vs SRL
+    fn sra(&mut self, reg: Register) {
+        let value: u8 = self.read_reg(reg);
+        self.flags.cf = value & 1 != 0;
+        let result = (value >> 1) | (value & 0x80);
+        self.write_reg(reg, result);
+
+        self.flags.sf = (result & 0x80) != 0;
+        self.flags.zf = result == 0;
+        self.flags.pf = self.parity(value);
+        self.flags.yf = (value & 0x20) != 0;
+        self.flags.xf = (value & 0x08) != 0;
+        self.flags.nf = false;
+        self.flags.hf = false;
+        self.flags.pf = self.parity(value as u8);
+        if reg == HL {
+            self.adv_cycles(7);
+        }
+        self.adv_cycles(8);
+        self.adv_pc(2);
+    }
+
+    fn srl(&mut self, reg: Register) {
+        let value: u8 = self.read_reg(reg);
+        self.flags.cf = value & 1 != 0;
+        self.write_reg(reg, value >> 1);
+        let result = self.read_reg(reg);
+
+        self.flags.sf = (result & 0x80) != 0;
+        self.flags.zf = result == 0;
+        self.flags.pf = self.parity(value);
+        self.flags.yf = (value & 0x20) != 0;
+        self.flags.xf = (value & 0x08) != 0;
+        self.flags.nf = false;
+        self.flags.hf = false;
+        self.flags.pf = self.parity(value as u8);
+        if reg == HL {
+            self.adv_cycles(7);
+        }
+        self.adv_cycles(8);
+        self.adv_pc(2);
     }
 
     // Conditional return
@@ -1604,7 +1793,7 @@ impl Cpu {
     }
 
     fn xthl(&mut self) {
-        // Swap H:L with top word on stack
+        // Swap HL with top word in stack
         let hl = self.read_pair(Register::HL) as u16;
         let new_hl = self.read16(self.reg.sp);
         // Write old HL values to memory
@@ -1742,6 +1931,23 @@ impl Cpu {
     pub fn nop(&mut self) {
         self.adv_pc(1);
         self.adv_cycles(4);
+    }
+    fn neg(&mut self) {
+        let value = self.reg.a;
+        let result = 0_u16.wrapping_sub(value as u16);
+        let overflow = 0_i8.overflowing_sub(value as i8).1;
+
+        self.flags.sf = (result & 0x80) != 0;
+        self.flags.zf = (result & 0xFF) == 0;
+        self.flags.hf = self.hf_sub(self.reg.a, value as u8);
+        self.flags.pf = overflow;
+        self.flags.nf = true;
+        self.flags.yf = (result & 0x20) != 0;
+        self.flags.xf = (result & 0x08) != 0;
+        self.flags.cf = (result & 0x0100) != 0;
+        self.reg.a = result as u8;
+        self.adv_pc(2);
+        self.adv_cycles(8);
     }
 
     pub fn execute(&mut self) {
@@ -2007,7 +2213,63 @@ impl Cpu {
                     0x04 => self.rlc(H),
                     0x05 => self.rlc(L),
                     0x06 => self.rlc(HL),
+                    0x07 => self.rlc(A),
                     0x08 => self.rrc(B),
+                    0x09 => self.rrc(C),
+                    0x0A => self.rrc(D),
+                    0x0B => self.rrc(E),
+                    0x0C => self.rrc(H),
+                    0x0D => self.rrc(L),
+                    0x0E => self.rrc(HL),
+                    0x0F => self.rrc(A),
+                    0x10 => self.rl(B),
+                    0x11 => self.rl(C),
+                    0x12 => self.rl(D),
+                    0x13 => self.rl(E),
+                    0x14 => self.rl(H),
+                    0x15 => self.rl(L),
+                    0x16 => self.rl(HL),
+                    0x17 => self.rl(A),
+                    0x18 => self.rr(B),
+                    0x19 => self.rr(C),
+                    0x1A => self.rr(D),
+                    0x1B => self.rr(E),
+                    0x1C => self.rr(H),
+                    0x1D => self.rr(L),
+                    0x1E => self.rr(HL),
+                    0x1F => self.rr(A),
+                    0x20 => self.sla(B),
+                    0x21 => self.sla(C),
+                    0x22 => self.sla(D),
+                    0x23 => self.sla(E),
+                    0x24 => self.sla(H),
+                    0x25 => self.sla(L),
+                    0x26 => self.sla(HL),
+                    0x27 => self.sla(A),
+                    0x28 => self.sra(B),
+                    0x29 => self.sra(C),
+                    0x2A => self.sra(D),
+                    0x2B => self.sra(E),
+                    0x2C => self.sra(H),
+                    0x2D => self.sra(L),
+                    0x2E => self.sra(HL),
+                    0x2F => self.sra(A),
+                    0x30 => self.sll(B),
+                    0x31 => self.sll(C),
+                    0x32 => self.sll(D),
+                    0x33 => self.sll(E),
+                    0x34 => self.sll(H),
+                    0x35 => self.sll(L),
+                    0x36 => self.sll(HL),
+                    0x37 => self.sll(A),
+                    0x38 => self.srl(B),
+                    0x39 => self.srl(C),
+                    0x3A => self.srl(D),
+                    0x3B => self.srl(E),
+                    0x3C => self.srl(H),
+                    0x3D => self.srl(L),
+                    0x3E => self.srl(HL),
+                    0x3F => self.srl(A),
                     0x40 => self.bit(0, B),
                     0x41 => self.bit(0, C),
                     0x42 => self.bit(0, D),
@@ -2294,6 +2556,13 @@ impl Cpu {
                     0x6D => self.ld(IXL, IXL),
                     0x6E => self.ld(L, IxIm),
                     0x6F => self.ld(IXL, A),
+                    0x70 => self.ld(IxIm, B),
+                    0x71 => self.ld(IxIm, C),
+                    0x72 => self.ld(IxIm, D),
+                    0x73 => self.ld(IxIm, E),
+                    0x74 => self.ld(IxIm, H),
+                    0x75 => self.ld(IxIm, L),
+
                     0x7E => {
                         // byte is the signed displacement byte
                         let byte = self.read8(self.reg.pc + 2) as i8;
@@ -2349,13 +2618,11 @@ impl Cpu {
                     0xE9 => self.jp(self.reg.ix, 8),
 
                     _ => {
-                        eprintln!("Last instruction:{:#?}", Instruction::decode(self));
-                        unimplemented!(
-                            "Unimplemented DD instruction: {:02X}{:02X}{:02X}",
-                            self.opcode,
-                            self.next_opcode,
-                            self.read8(self.reg.pc + 2)
-                        )
+                        self.reg.r = (self.reg.r & 0x80) | (self.reg.r.wrapping_sub(1)) & 0x7f;
+                        self.opcode = self.next_opcode;
+                        self.adv_pc(1);
+                        self.adv_cycles(4);
+                        self.decode(self.opcode)
                     }
                 }
             }
@@ -2379,44 +2646,64 @@ impl Cpu {
                 self.reg.r = (self.reg.r & 0x80) | (self.reg.r.wrapping_add(1)) & 0x7f;
                 match self.next_opcode {
                     0x08 => self.in_c(C),
-                    0xA0 => self.ldi(),
-                    0xA1 => self.cpi(),
-                    0xA9 => self.cpd(),
-                    0xB0 => self.ldir(),
+
                     0x42 => self.sbc_hl(BC),
                     0x43 => self.ld_mem_nn_rp(BC),
+                    0x44 => self.neg(),
                     0x46 => self.set_interrupt_mode(0),
                     0x47 => self.ld(I, A),
                     0x4A => self.adc_hl(BC),
                     0x4B => self.ld_rp_mem_nn(BC),
+                    0x4D => unimplemented!("RETI"),
                     0x4F => self.ld(R, A),
                     0x50 => self.in_c(D),
                     0x52 => self.sbc_hl(DE),
                     0x53 => self.ld_mem_nn_rp(DE),
+                    0x54 => self.neg(),
                     0x5E => self.set_interrupt_mode(2),
                     0x56 => self.set_interrupt_mode(1),
                     0x57 => self.ld(A, I),
+                    0x5C => self.neg(),
                     0x5F => self.ld(A, R),
                     0x5A => self.adc_hl(DE),
                     0x5B => self.ld_rp_mem_nn(DE),
+                    0x5D => unimplemented!("RETN"),
                     0x62 => self.sbc_hl(HL),
                     0x63 => self.ld_mem_nn_rp(HL),
+                    0x64 => self.neg(),
                     0x66 => self.set_interrupt_mode(0),
+                    0x67 => self.rrd(),
                     0x6A => self.adc_hl(HL),
                     0x6B => self.ld_rp_mem_nn(HL),
+                    0x6C => self.neg(),
+                    0x6D => unimplemented!("RETN"),
+                    0x6E => self.set_interrupt_mode(1), // IM 0/1
+                    0x6F => self.rld(),
                     0x72 => self.sbc_hl(SP),
                     0x73 => self.ld_mem_nn_rp(SP),
+                    0x74 => self.neg(),
                     0x76 => self.set_interrupt_mode(1),
-                    0x7B => self.ld_rp_mem_nn(SP),
                     0x7A => self.adc_hl(SP),
+                    0x7B => self.ld_rp_mem_nn(SP),
+                    0x7C => self.neg(),
+                    0x7D => unimplemented!("RETN"),
                     0x7E => self.set_interrupt_mode(2),
+                    0xA0 => self.ldi(),
+                    0xA1 => self.cpi(),
+                    0xA8 => self.ldd(),
+                    0xA9 => self.cpd(),
+                    0xAA => unimplemented!("IND"),
+                    0xAB => unimplemented!("OUTD"),
+                    0xB0 => self.ldir(),
+                    0xB8 => self.lddr(),
                     0xB1 => self.cpir(),
                     0xB9 => self.cpdr(),
+                    0xBA => unimplemented!("INDR"),
+                    0xBB => unimplemented!("OUTDR"),
                     _ => unimplemented!(
-                        "Unimplemented ED instruction:{:02X}{:02X}{:02X}",
+                        "Unimplemented ED instruction:{:02X}{:02X}",
                         self.opcode,
                         self.next_opcode,
-                        self.read8(self.reg.pc + 1),
                     ),
                 }
             }
@@ -2440,12 +2727,10 @@ impl Cpu {
                 self.reg.r = (self.reg.r & 0x80) | (self.reg.r.wrapping_add(1)) & 0x7f;
                 match self.next_opcode {
                     0x09 => self.add_rp(IY, BC),
-                    0x6E => self.ld(L, IyIm),
-                    0x6F => self.ld(IYL, A),
+
                     0x19 => self.add_rp(IY, DE),
                     0x21 => self.ld_rp_nn(IY),
                     0x22 => self.ld_mem_nn_rp(IY),
-                    // 0x22 => self.shld(IY),
                     0x23 => self.inc_rp(IY),
                     0x26 => self.mvi(IYH),
                     0x29 => self.add_rp(IY, IY),
@@ -2473,16 +2758,28 @@ impl Cpu {
                     0x5D => self.ld(E, IYL),
                     0x5E => self.ld(E, IyIm),
 
-                    0xE1 => self.pop(IY),
-                    0xE5 => self.push(IY),
-                    0xE9 => self.jp(self.read_pair(IY), 8),
-                    0x66 => {
-                        let byte = self.read8(self.reg.pc + 2);
-                        let addr = self.reg.iy.wrapping_add(byte as u16);
-                        self.reg.h = self.read8(addr) as u8;
-                        self.adv_pc(3);
-                        self.adv_cycles(19);
-                    }
+                    0x60 => self.ld(IYH, B),
+                    0x61 => self.ld(IYH, C),
+                    0x62 => self.ld(IYH, D),
+                    0x63 => self.ld(IYH, E),
+                    0x64 => self.ld(IYH, IYH),
+                    0x65 => self.ld(IYH, IYL),
+                    0x66 => self.ld(H, IyIm),
+                    0x67 => self.ld(IYH, A),
+                    0x68 => self.ld(IYL, B),
+                    0x69 => self.ld(IYL, C),
+                    0x6A => self.ld(IYL, D),
+                    0x6B => self.ld(IYL, E),
+                    0x6C => self.ld(IYL, IYH),
+                    0x6D => self.ld(IYL, IYL),
+                    0x6E => self.ld(L, IyIm),
+                    0x6F => self.ld(IYL, A),
+                    0x70 => self.ld(IyIm, B),
+                    0x71 => self.ld(IyIm, C),
+                    0x72 => self.ld(IyIm, D),
+                    0x73 => self.ld(IyIm, E),
+                    0x74 => self.ld(IyIm, H),
+                    0x75 => self.ld(IyIm, L),
                     0x7E => {
                         // byte is the signed displacement byte
                         let byte = self.read8(self.reg.pc + 2) as i8;
@@ -2491,6 +2788,11 @@ impl Cpu {
                         self.adv_pc(3);
                         self.adv_cycles(19);
                     }
+                    0x77 => self.ld(A, IyIm),
+
+                    0xE1 => self.pop(IY),
+                    0xE5 => self.push(IY),
+                    0xE9 => self.jp(self.read_pair(IY), 8),
 
                     0x84 => self.add(IYH),
                     0x85 => self.add(IYL),
@@ -2516,7 +2818,7 @@ impl Cpu {
                     0xB6 => self.ora(IyIm),
                     0xBC => self.cmp(IYH),
                     0xBD => self.cmp(IYH),
-                    0xBE => self.cmp(IxIm),
+                    0xBE => self.cmp(IyIm),
                     0xCB => {
                         let next_opcode = self.read8(self.reg.pc + 2);
                         match next_opcode {
@@ -2529,7 +2831,17 @@ impl Cpu {
                             _ => unimplemented!("DDCB:{:02X}", next_opcode),
                         }
                     }
-                    _ => panic!("{:#?}", Instruction::decode(self)),
+                    // Illegal / invalid opcodes proceeding the 0xDD / 0xFD prefix should be
+                    // treated as normal opcodes
+                    // R is decremented to avoid a double increment here due to the recursive call
+                    _ => {
+                        self.adv_pc(1);
+                        self.adv_cycles(4); // TODO DD / FD instructions automatically use 4 cycles
+                        // in fetching the instruction
+                        self.reg.r = (self.reg.r & 0x80) | (self.reg.r.wrapping_sub(1)) & 0x7f;
+                        self.opcode = self.next_opcode;
+                        self.decode(self.opcode)
+                    }
                 }
             }
             0xFE => self.cp_im(),

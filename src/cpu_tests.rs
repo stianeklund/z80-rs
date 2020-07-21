@@ -1,10 +1,10 @@
 #[cfg(test)]
 mod tests {
     use crate::instruction_info::Register;
-    use crate::instruction_info::Register::{BC, DE, HL};
+    use crate::instruction_info::Register::{BC, DE, HL, IXH};
     use crate::interconnect::Interconnect;
 
-    // #[test]
+    #[test]
     fn test_hf_flag() {
         // Make sure HF flag gets set on accumulator value wrap from FFh to 00h.
         let mut i = Interconnect::default();
@@ -12,8 +12,20 @@ mod tests {
         i.cpu.inc(Register::A);
         assert_eq!(i.cpu.flags.hf, true);
     }
+    #[test]
+    fn test_ld_ixh_ixh() {
+        let mut i = Interconnect::default();
+        i.cpu.reg.a = 0xff;
+        i.cpu.reg.ix = 0xfff0;
+        i.cpu.ld(Register::IXH, Register::IXH);
+        assert_eq!(i.cpu.reg.ix, 0xfff0);
+        assert_eq!(i.cpu.cycles, 8);
+        assert_eq!(i.cpu.reg.pc, 2);
 
-    // #[test]
+
+    }
+
+    #[test]
     fn test_hf_high_byte() {
         // The half carry flag should be set once we increment HL from 00FFh to 0000h
         let mut i = Interconnect::default();

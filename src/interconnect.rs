@@ -41,7 +41,7 @@ impl Interconnect {
         self.cpu.decode(self.cpu.opcode);
     }
     fn debug_decode(&mut self) {
-        self.cpu.instruction = Instruction::decode(&self.cpu)
+        self.cpu.instruction = Instruction::decode(&mut self.cpu)
             .expect(format!("Unknown opcode:{:04X}", self.cpu.opcode).as_str());
 
         if self.cpu.instruction.name.to_string().len() < 1 {
