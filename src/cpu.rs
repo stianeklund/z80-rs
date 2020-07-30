@@ -188,6 +188,11 @@ impl MemoryRW for Cpu {
         }
     }
 
+    fn read8_inc(&mut self, addr: u16) -> u8 {
+        self.adv_pc(1);
+        self.read8(addr)
+    }
+
     #[inline]
     fn read16(&self, addr: u16) -> u16 {
         u16::from_le_bytes([self.read8(addr), self.read8(addr + 1)])
@@ -292,11 +297,11 @@ impl Cpu {
             IxIm => {
                 let byte = self.read8(self.reg.pc + 1) as i8;
                 self.write8(self.reg.ix.wrapping_add(byte as u16), value)
-            },
+            }
             IyIm => {
                 let byte = self.read8(self.reg.pc + 1) as i8;
                 self.write8(self.reg.iy.wrapping_add(byte as u16), value)
-            },
+            }
             _ => panic!(format!(
                 "Writing to RP: {:#?}, is not supported by write_reg, called by: {}, opcode:{:02X}{:02X}",
                 reg, self.current_instruction, self.opcode, self.next_opcode
@@ -358,6 +363,31 @@ impl Cpu {
         self.cycles = self.cycles.wrapping_add(t);
     }
 
+    // Add Immediate to Accumulator with Carry
+    fn adc_im(&mut self) {
+        let value = self.read8(self.reg.pc + 1) as u16;
+
+        // Add immediate with accumulator + carry flag value
+        let carry = self.flags.cf as u8;
+        let result = (value)
+            .wrapping_add(self.reg.a as u16)
+            .wrapping_add(carry as u16);
+
+        self.flags.sf = (result & 0x80) != 0;
+        self.flags.zf = (result & 0xFF) == 0;
+        self.flags.hf = self.hf_add(self.reg.a, value as u8);
+        self.flags.yf = (result & 0x20) != 0;
+        self.flags.xf = (result & 0x08) != 0;
+        self.flags.nf = false;
+        self.flags.pf = self.overflow(self.reg.a as i8, value as i8, result as i8);
+        self.flags.cf = (result & 0x0100) != 0;
+
+        self.reg.a = result as u8;
+
+        self.adv_cycles(7);
+        self.adv_pc(2);
+    }
+
     // TODO refactor ADD / ADC instructions
     // pass value in from the caller and have one method for most of these
     fn adc(&mut self, reg: Register) {
@@ -414,31 +444,6 @@ impl Cpu {
         self.write_pair(HL, result as u16);
 
         self.adv_cycles(15);
-        self.adv_pc(2);
-    }
-
-    // Add Immediate to Accumulator with Carry
-    fn adc_im(&mut self) {
-        let value = self.read8(self.reg.pc + 1) as u16;
-
-        // Add immediate with accumulator + carry flag value
-        let carry = self.flags.cf as u8;
-        let result = (value)
-            .wrapping_add(self.reg.a as u16)
-            .wrapping_add(carry as u16);
-
-        self.flags.sf = (result & 0x80) != 0;
-        self.flags.zf = (result & 0xFF) == 0;
-        self.flags.hf = self.hf_add(self.reg.a, value as u8);
-        self.flags.yf = (result & 0x20) != 0;
-        self.flags.xf = (result & 0x08) != 0;
-        self.flags.nf = false;
-        self.flags.pf = self.overflow(self.reg.a as i8, value as i8, result as i8);
-        self.flags.cf = (result & 0x0100) != 0;
-
-        self.reg.a = result as u8;
-
-        self.adv_cycles(7);
         self.adv_pc(2);
     }
 
@@ -746,20 +751,15 @@ impl Cpu {
             }
             IxIm | IyIm => {
                 self.adv_pc(1);
-                // Get memory IX or IY + * displaced location
+                // displacement
                 let offset = self.read8(self.reg.pc + 1) as i8;
+                // base address
                 let value = match dst {
-                    IxIm => self.reg.ix.wrapping_add(offset as u16) as u8,
-                    IyIm => self.reg.iy.wrapping_add(offset as u16) as u8,
+                    IxIm => self.reg.ix.wrapping_add(offset as u16),
+                    IyIm => self.reg.iy.wrapping_add(offset as u16),
                     _ => panic!("LD unknown destination:{:#?}", dst),
                 };
-                match src {
-                    A | B | C | D | E | H | L => self.write8(value as u16, self.read_reg(src)),
-                    IxIm | IyIm => self.write_reg(dst, value),
-                    _ => panic!("LD IXIM / IYIM unknown source:{:#?}", src),
-                }
-
-                // self.write_reg(dst, value);
+                self.write8(value as u16, self.read_reg(src));
                 self.adv_cycles(15);
                 self.adv_pc(1);
             }
@@ -823,7 +823,7 @@ impl Cpu {
     }
 
     // Extended instructions: ex: LD (**), HL
-    // 0xED63, 0xED53 etc..
+    // 0xED63, 0xED53 etc 0xED73
     // Stores (REGPAIR) into the memory loc pointed to by **
     // TODO & LOAD INDIRECT BUG?
     fn ld_mem_nn_rp(&mut self, reg: Register) {
@@ -843,8 +843,8 @@ impl Cpu {
     }
 
     // Extended instructions: ex: LD HL, (**) LD SP, (**)
-    // 0xED6B, 0xED5B etc..
-    // Loads the value pointed to by ** into (REGPAIR)
+    // 0xED6B, 0xED5B, 0xED7B etc.
+    // Loads the value pointed to in memory by ** into REGPAIR
     fn ld_rp_mem_nn(&mut self, reg: Register) {
         self.adv_pc(2);
         let word = self.read16(self.reg.pc);
@@ -1467,16 +1467,11 @@ impl Cpu {
     // LD RP (**)
     fn lhld(&mut self, reg: Register) {
         // Load the HL register with 16 bits found at addr & addr + 1
-
-        // let addr = next_word(); <-- nextw is pc+=2 rw(pc-2);
-        // set_hl(rw(addr);
-        // ADDR should be 0103 (byte sequence is: FB 2A 03 01 2A 03 01 22
         let addr: u16 = if reg == HL {
             self.read16(self.reg.pc + 1)
         } else {
             self.read16(self.reg.pc + 2)
         };
-
         self.write_pair(reg, self.read16(addr) as u16);
         self.adv_pc(3);
         if reg == IX || reg == IY {
@@ -1977,7 +1972,6 @@ impl Cpu {
             0x07 => self.rlca(),
             0x08 => self.ex_af_af(),
             0x09 => self.add_hl(BC),
-            0x10 => self.djnz(),
 
             0x0A => self.ld(A, BC),
             0x0B => self.dec_rp(BC),
@@ -1986,6 +1980,7 @@ impl Cpu {
             0x0E => self.mvi(C),
             0x0F => self.rrca(),
 
+            0x10 => self.djnz(),
             0x11 => self.ld_rp_nn(DE),
             0x12 => self.ld(DE, A),
             0x13 => self.inc_rp(DE),
@@ -2562,6 +2557,7 @@ impl Cpu {
                     0x73 => self.ld(IxIm, E),
                     0x74 => self.ld(IxIm, H),
                     0x75 => self.ld(IxIm, L),
+                    0x77 => self.ld(IxIm, A),
 
                     0x7E => {
                         // byte is the signed displacement byte
@@ -2571,7 +2567,6 @@ impl Cpu {
                         self.adv_pc(3);
                         self.adv_cycles(19);
                     }
-                    0x77 => self.ld(A, IxIm),
                     0x84 => self.add(IXH),
                     0x85 => self.add(IXL),
                     0x86 => self.add(IxIm),
@@ -2780,6 +2775,7 @@ impl Cpu {
                     0x73 => self.ld(IyIm, E),
                     0x74 => self.ld(IyIm, H),
                     0x75 => self.ld(IyIm, L),
+                    0x77 => self.ld(IyIm, A),
                     0x7E => {
                         // byte is the signed displacement byte
                         let byte = self.read8(self.reg.pc + 2) as i8;
@@ -2788,7 +2784,6 @@ impl Cpu {
                         self.adv_pc(3);
                         self.adv_cycles(19);
                     }
-                    0x77 => self.ld(A, IyIm),
 
                     0xE1 => self.pop(IY),
                     0xE5 => self.push(IY),
@@ -2837,7 +2832,7 @@ impl Cpu {
                     _ => {
                         self.adv_pc(1);
                         self.adv_cycles(4); // TODO DD / FD instructions automatically use 4 cycles
-                        // in fetching the instruction
+                                            // in fetching the instruction
                         self.reg.r = (self.reg.r & 0x80) | (self.reg.r.wrapping_sub(1)) & 0x7f;
                         self.opcode = self.next_opcode;
                         self.decode(self.opcode)

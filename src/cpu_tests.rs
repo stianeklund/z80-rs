@@ -21,8 +21,6 @@ mod tests {
         assert_eq!(i.cpu.reg.ix, 0xfff0);
         assert_eq!(i.cpu.cycles, 8);
         assert_eq!(i.cpu.reg.pc, 2);
-
-
     }
 
     #[test]
@@ -48,8 +46,8 @@ mod tests {
     #[test]
     #[ignore] // Ignored for now as they do not pass
     fn z80_precise() {
-        assert_eq!(exec_test("tests/zexdoc.com"), 46734978649);
-        // assert_eq!(exec_test("tests/zexdoc.cim"), 46734978649);
+        // assert_eq!(exec_test("tests/zexdoc.com"), 46734978649);
+        assert_eq!(exec_test("tests/zexdoc.cim"), 46734978649); // Custom test
         // assert_eq!(exec_test("tests/zexall.com"), 46734978649);
     }
 

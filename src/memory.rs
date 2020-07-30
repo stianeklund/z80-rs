@@ -39,6 +39,7 @@ impl Index<u16> for Memory {
 
 pub trait MemoryRW {
     fn read8(&self, addr: u16) -> u8;
+    fn read8_inc(&mut self, addr: u16) -> u8;
     fn read16(&self, addr: u16) -> u16;
     fn write16(&mut self, addr: u16, word: u16);
     fn write8(&mut self, addr: u16, byte: u8);

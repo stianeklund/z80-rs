@@ -58,14 +58,21 @@ Jump to 0 from 032F
 Test loaded: "tests/zexdoc.com" Bytes: 8588
 
 Z80doc instruction exerciser
-<adc,sbc> hl,<bc,de,hl,sp>....  OK
+<adc,sbc> hl,<bc,de,hl,sp>....END TIMING TEST
+CPU TESTS OK
+
+BDOS routine called, jumped to: 0 from 0C2E
+Cycles executed: 240551424
+
+test cpu_tests::tests::fast_z80 ... ok
+  OK
 add hl,<bc,de,hl,sp>..........  OK
 add ix,<bc,de,ix,sp>..........  OK
 add iy,<bc,de,iy,sp>..........  OK
 aluop a,nn....................  ERROR **** crc expected:48799360 found:932ac8f0
-aluop a,<b,c,d,e,h,l,(hl),a>..  ERROR **** crc expected:fe43b016 found:f34ab2f3
+aluop a,<b,c,d,e,h,l,(hl),a>... ERROR **** crc expected:fe43b016 found:f34ab2f3
 aluop a,<ixh,ixl,iyh,iyl>.....  ERROR **** crc expected:a4026d5a found:50ceea50
-aluop a,(<ix,iy>+1)...........  ERROR **** crc expected:e849676e found:7990d45c
+aluop a,(<ix,iy>+1)...........  ERROR **** crc expected:e849676e found:07abd899
 bit n,(<ix,iy>+1).............  ERROR **** crc expected:a8ee0867 found:efb20fe7
 bit n,<b,c,d,e,h,l,(hl),a>....  OK
 cpd<r>........................  ERROR **** crc expected:a87e6cfa found:8a2154a8
@@ -108,6 +115,24 @@ ld <h,l>,(<ix,iy>+1)..........  OK
 ld a,(<ix,iy>+1)..............  OK
 ld <ixh,ixl,iyh,iyl>,nn.......  OK
 ld <bcdehla>,<bcdehla>........  OK
+ld <bcdexya>,<bcdexya>........  OK
+ld a,(nnnn) / ld (nnnn),a.....  OK
+ldd<r> (1)....................  ERROR **** crc expected:94f42769 found:b94a393d
+ldd<r> (2)....................  ERROR **** crc expected:5a907ed4 found:772e6080
+ldi<r> (1)....................  ERROR **** crc expected:9abdf6b5 found:b703e8e1
+ldi<r> (2)....................  ERROR **** crc expected:eb59891b found:1c991b87
+neg...........................  ERROR **** crc expected:6a3c3bbd found:dfbcf11d
+<rrd,rld>.....................  ERROR **** crc expected:955ba326 found:2c05f8a4
+<rlca,rrca,rla,rra>...........  ERROR **** crc expected:251330ae found:34b41bec
+shf/rot (<ix,iy>+1)...........  ERROR **** crc expected:713acd81 found:c5ed15c5
+shf/rot <b,c,d,e,h,l,(hl),a>..  ERROR **** crc expected:eb604d58 found:772bdc9b
+<set,res> n,<bcdehl(hl)a>.....  ERROR **** crc expected:8b57f008 found:36d25f63
+<set,res> n,(<ix,iy>+1).......  ERROR **** crc expected:cc63f98a found:fe27dcf9
+ld (<ix,iy>+1),<b,c,d,e>......  OK
+ld (<ix,iy>+1),<h,l>..........  OK
+ld (<ix,iy>+1),a..............  OK
+ld (<bc,de>),a................  OK
+Tests complete
 ```
 --- 
 
