@@ -55,24 +55,18 @@ Jump to 0 from 032F
 #### Zexdoc
 
 ```
+
 Test loaded: "tests/zexdoc.com" Bytes: 8588
 
 Z80doc instruction exerciser
-<adc,sbc> hl,<bc,de,hl,sp>....END TIMING TEST
-CPU TESTS OK
-
-BDOS routine called, jumped to: 0 from 0C2E
-Cycles executed: 240551424
-
-test cpu_tests::tests::fast_z80 ... ok
-  OK
+<adc,sbc> hl,<bc,de,hl,sp>....  OK
 add hl,<bc,de,hl,sp>..........  OK
 add ix,<bc,de,ix,sp>..........  OK
 add iy,<bc,de,iy,sp>..........  OK
-aluop a,nn....................  ERROR **** crc expected:48799360 found:932ac8f0
-aluop a,<b,c,d,e,h,l,(hl),a>... ERROR **** crc expected:fe43b016 found:f34ab2f3
-aluop a,<ixh,ixl,iyh,iyl>.....  ERROR **** crc expected:a4026d5a found:50ceea50
-aluop a,(<ix,iy>+1)...........  ERROR **** crc expected:e849676e found:07abd899
+aluop a,nn....................  OK
+aluop a,<b,c,d,e,h,l,(hl),a>..  ERROR **** crc expected:fe43b016 found:80744231
+aluop a,<ixh,ixl,iyh,iyl>.....  ERROR **** crc expected:a4026d5a found:18e22f28
+aluop a,(<ix,iy>+1)...........  ERROR **** crc expected:e849676e found:b2b3f5cf
 bit n,(<ix,iy>+1).............  ERROR **** crc expected:a8ee0867 found:efb20fe7
 bit n,<b,c,d,e,h,l,(hl),a>....  OK
 cpd<r>........................  ERROR **** crc expected:a87e6cfa found:8a2154a8

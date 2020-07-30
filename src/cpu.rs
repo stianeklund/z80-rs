@@ -277,7 +277,7 @@ impl Cpu {
         }
     }
 
-    fn write_reg(&mut self, reg: Register, value: u8) {
+    pub(crate) fn write_reg(&mut self, reg: Register, value: u8) {
         match reg {
             A => self.reg.a = value,
             B => self.reg.b = value,
@@ -364,7 +364,7 @@ impl Cpu {
     }
 
     // Add Immediate to Accumulator with Carry
-    fn adc_im(&mut self) {
+    pub(crate) fn adc_im(&mut self) {
         let value = self.read8(self.reg.pc + 1) as u16;
 
         // Add immediate with accumulator + carry flag value
@@ -375,7 +375,7 @@ impl Cpu {
 
         self.flags.sf = (result & 0x80) != 0;
         self.flags.zf = (result & 0xFF) == 0;
-        self.flags.hf = self.hf_add(self.reg.a, value as u8);
+        self.flags.hf = self.hf_add(self.reg.a, value as u8, self.flags.cf);
         self.flags.yf = (result & 0x20) != 0;
         self.flags.xf = (result & 0x08) != 0;
         self.flags.nf = false;
@@ -405,7 +405,7 @@ impl Cpu {
 
         self.flags.sf = (result & 0x80) != 0;
         self.flags.zf = (result & 0xFF) == 0;
-        self.flags.hf = self.hf_add(self.reg.a, value as u8);
+        self.flags.hf = self.hf_add(self.reg.a, value as u8, self.flags.cf);
         self.flags.pf = self.overflow(self.reg.a as i8, value as i8, result as i8);
         self.flags.nf = false;
         self.flags.yf = (result & 0x20) != 0;
@@ -499,7 +499,7 @@ impl Cpu {
 
         self.flags.sf = (result & 0x80) != 0;
         self.flags.zf = (result & 0xFF) == 0;
-        self.flags.hf = self.hf_add(self.reg.a, value as u8);
+        self.flags.hf = self.hf_add(self.reg.a, value as u8, false);
         self.flags.pf = self.overflow(self.reg.a as i8, value as i8, result as i8);
         self.flags.nf = false;
         self.flags.yf = (result & 0x20) != 0;
@@ -525,7 +525,7 @@ impl Cpu {
         self.flags.yf = (result & 0x20) != 0;
         self.flags.xf = (result & 0x08) != 0;
         self.flags.nf = false;
-        self.flags.hf = self.hf_add(self.reg.a, value as u8);
+        self.flags.hf = self.hf_add(self.reg.a, value as u8, false);
         self.flags.cf = (result & 0x0100) != 0;
 
         self.reg.a = result as u8;
@@ -949,7 +949,7 @@ impl Cpu {
 
         self.flags.sf = (result & 0x80) != 0;
         self.flags.zf = (result & 0xFF) == 0;
-        self.flags.hf = self.hf_sub(self.reg.a, value as u8);
+        self.flags.hf = self.hf_sub(self.reg.a, value as u8, false);
         self.flags.nf = true;
         // The XF & YF flags use the non compared value
         self.flags.yf = (value & 0x20) != 0;
@@ -971,7 +971,7 @@ impl Cpu {
         self.flags.sf = (result & 0x80) != 0;
         self.flags.zf = (result & 0xFF) == 0;
         self.flags.yf = (value & 0x20) != 0;
-        self.flags.hf = self.hf_sub(self.reg.a, value as u8);
+        self.flags.hf = self.hf_sub(self.reg.a, value as u8, false);
         self.flags.xf = (value & 0x08) != 0;
         self.flags.pf = overflow;
         self.flags.nf = true;
@@ -991,7 +991,7 @@ impl Cpu {
         self.flags.nf = true;
         self.flags.sf = (result & 0x80) != 0;
         self.flags.zf = (result & 0xFF) == 0;
-        self.flags.hf = self.hf_sub(self.reg.a, value);
+        self.flags.hf = self.hf_sub(self.reg.a, value, false);
         // self.flags.pf = self.overflow(value, result as u8);
         self.flags.pf = overflow;
         // self.flags.cf = (result & 0x0100) != 0;
@@ -1051,7 +1051,7 @@ impl Cpu {
 
         self.flags.sf = (result & 0x80) != 0;
         self.flags.zf = result == 0;
-        self.flags.hf = self.hf_sub((result as u8).wrapping_add(1), 1);
+        self.flags.hf = self.hf_sub((result as u8).wrapping_add(1), 1, false);
         self.flags.pf = overflow;
         self.flags.nf = true;
         self.flags.yf = (result & 0x20) != 0;
@@ -1512,7 +1512,7 @@ impl Cpu {
 
         self.flags.sf = (result & 0x80) != 0;
         self.flags.zf = result == 0;
-        self.flags.hf = self.hf_add(result.wrapping_sub(1), 1);
+        self.flags.hf = self.hf_add(result.wrapping_sub(1), 1, false);
         self.flags.pf = overflow;
         self.flags.nf = false;
         self.flags.yf = (result & 0x20) != 0;
@@ -1571,7 +1571,7 @@ impl Cpu {
 
         self.flags.sf = (result & 0x80) != 0;
         self.flags.zf = (result & 0xFF) == 0;
-        self.flags.hf = self.hf_sub(self.read_reg(dst), value as u8);
+        self.flags.hf = self.hf_sub(self.read_reg(dst), value as u8, true);
         self.flags.pf = self.overflow(self.read_reg(dst) as i8, value as i8, result as i8);
         self.flags.yf = (result & 0x20) != 0;
         self.flags.xf = (result & 0x08) != 0;
@@ -1618,7 +1618,7 @@ impl Cpu {
 
         self.flags.sf = (result & 0x80) != 0;
         self.flags.zf = (result & 0xFF) == 0;
-        self.flags.hf = self.hf_sub(self.reg.a, value as u8);
+        self.flags.hf = self.hf_sub(self.reg.a, value as u8, false);
         self.flags.pf = overflow;
         self.flags.yf = (result & 0x20) != 0;
         self.flags.xf = (result & 0x08) != 0;
@@ -1649,7 +1649,7 @@ impl Cpu {
 
         self.flags.sf = (result & 0x80) != 0;
         self.flags.zf = (result & 0xFF) == 0;
-        self.flags.hf = self.hf_sub(self.reg.a, value as u8);
+        self.flags.hf = self.hf_sub(self.reg.a, value as u8, false);
         self.flags.pf = overflow;
         self.flags.nf = true;
         self.flags.yf = (result & 0x20) != 0;
@@ -1669,7 +1669,7 @@ impl Cpu {
 
         self.flags.sf = (result & 0x80) != 0;
         self.flags.zf = (result & 0xFF) == 0;
-        self.flags.hf = self.hf_sub(self.reg.a, value as u8);
+        self.flags.hf = self.hf_sub(self.reg.a, value as u8, false);
         self.flags.pf = self.overflow(self.reg.a as i8, value as i8, result as i8);
         self.flags.pf = overflow;
         self.flags.nf = true;
@@ -1934,7 +1934,7 @@ impl Cpu {
 
         self.flags.sf = (result & 0x80) != 0;
         self.flags.zf = (result & 0xFF) == 0;
-        self.flags.hf = self.hf_sub(self.reg.a, value as u8);
+        self.flags.hf = self.hf_sub(self.reg.a, value as u8, false);
         self.flags.pf = overflow;
         self.flags.nf = true;
         self.flags.yf = (result & 0x20) != 0;
@@ -2879,9 +2879,17 @@ impl Cpu {
         value.count_ones() & 1 == 0
     }
 
-    fn hf_add(&self, a: u8, b: u8) -> bool {
-        // ((((a & 0xF) + (b & 0xF)) & 0x10) & (1 << 4)) != 0
-        (((a as i8 & 0x0F).wrapping_add(b as i8 & 0x0F)) & 0x10) != 0
+    fn hf_add(&self, a: u8, b: u8, carry: bool) -> bool {
+        // ((((a as i8 & 0xF) + (b as i8 & 0xF)) & (1 << 4)) != 0
+        if !carry {
+            (((a as i8 & 0x0F).wrapping_add(b as i8 & 0x0F)) & 0x10) != 0
+        } else {
+            (((a as i8 & 0x0F)
+                .wrapping_add(b as i8 & 0x0F)
+                .wrapping_add(self.flags.cf as i8))
+                & 0x10)
+                != 0
+        }
     }
 
     fn hf_add_w(&self, a: u16, b: u16, carry: bool) -> bool {
@@ -2893,9 +2901,13 @@ impl Cpu {
         }
     }
 
-    fn hf_sub(&self, a: u8, b: u8) -> bool {
+    fn hf_sub(&self, a: u8, b: u8, carry: bool) -> bool {
         // Check if there has been a borrow from bit 4
-        (((a as i8 & 0xF) - (b as i8 & 0xF)) & (1 << 4)) != 0
+        if !carry {
+            (((a as i8 & 0xF) - (b as i8 & 0xF)) & (1 << 4)) != 0
+        } else {
+            (((a as i8 & 0xF) - (b as i8 & 0xF).wrapping_sub(self.flags.cf as i8)) & (1 << 4)) != 0
+        }
     }
     fn hf_sub_w(&self, a: u16, b: u16, carry: bool) -> bool {
         // True if there has been a borrow from bit 12

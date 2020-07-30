@@ -7,4 +7,4 @@ edition = "2018"
 # Optimize tests for speed
 [profile.test]
 opt-level = 3
-lto = true
+lto = "thin"

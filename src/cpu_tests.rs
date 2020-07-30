@@ -1,7 +1,7 @@
 #[cfg(test)]
 mod tests {
     use crate::instruction_info::Register;
-    use crate::instruction_info::Register::{BC, DE, HL, IXH};
+    use crate::instruction_info::Register::{BC, DE, HL, IX, IXH, IY, R, SP};
     use crate::interconnect::Interconnect;
 
     #[test]
@@ -36,6 +36,28 @@ mod tests {
     }
 
     #[test]
+    fn test_add_half_carry() {
+        // Replicates a scenario in Zexdoc where HF flag was not set
+        // due to the half carry not being tested with `a + b + carry` but only `a + b`
+        // TODO: Write separate test to cover HF flag more generally for both ADC and SBC
+        let mut i = Interconnect::default();
+        i.cpu.reg.pc = 0x1CBE;
+        i.cpu.reg.a = 0x6F;
+        i.cpu.flags.set(0x11);
+        i.cpu.write_pair(BC, 0x0B29);
+        i.cpu.write_pair(BC, 0x5B61);
+        i.cpu.write_pair(HL, 0xDF6D);
+        i.cpu.write_pair(SP, 0x85B2);
+        i.cpu.write_pair(IX, 0x7A67);
+        i.cpu.write_pair(IY, 0x7E3C);
+        i.cpu.write_reg(R, 0x09);
+        i.cpu.cycles = 307892903;
+        // Expected values: value = 01; carry = 0; result = 68;
+        i.cpu.adc_im();
+        assert_eq!(i.cpu.flags.hf, true);
+    }
+
+    #[test]
     fn fast_z80() {
         // Assert the tests executed CPU cycle amount vs real hardware cycle
         assert_eq!(exec_test("tests/prelim.com"), 8721);
@@ -45,9 +67,10 @@ mod tests {
 
     #[test]
     #[ignore] // Ignored for now as they do not pass
+              // zexdoc.cim is a custom binary compiled with zmac where certain tests are stubbed
     fn z80_precise() {
         // assert_eq!(exec_test("tests/zexdoc.com"), 46734978649);
-        assert_eq!(exec_test("tests/zexdoc.cim"), 46734978649); // Custom test
+        assert_eq!(exec_test("tests/zexdoc.cim"), 46734978649);
         // assert_eq!(exec_test("tests/zexall.com"), 46734978649);
     }
 
