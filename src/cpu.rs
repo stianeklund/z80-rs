@@ -1,3 +1,5 @@
+use std::ops::BitXor;
+
 use crate::instruction_info::{Instruction, Register, Register::*};
 use crate::memory::{Memory, MemoryRW};
 
@@ -258,7 +260,7 @@ impl Cpu {
             IYL => (self.reg.iy & 0xFF) as u8,
 
             // We only use HL here indexed in memory anyways..
-            HL => self.memory[self.read_pair(HL)],
+            HL => self.read8(self.read_pair(HL)),
             IxIm => {
                 let offset = self.read8(self.reg.pc.wrapping_add(1)) as i8;
                 self.read8(self.reg.ix.wrapping_add(offset as u16))
@@ -277,8 +279,8 @@ impl Cpu {
         }
     }
 
-    pub(crate) fn write_reg(&mut self, reg: Register, value: u8) {
-        match reg {
+    pub(crate) fn write_reg(&mut self, dst: Register, value: u8) {
+        match dst {
             A => self.reg.a = value,
             B => self.reg.b = value,
             C => self.reg.c = value,
@@ -304,7 +306,7 @@ impl Cpu {
             }
             _ => panic!(format!(
                 "Writing to RP: {:#?}, is not supported by write_reg, called by: {}, opcode:{:02X}{:02X}",
-                reg, self.current_instruction, self.opcode, self.next_opcode
+                dst, self.current_instruction, self.opcode, self.next_opcode
             )),
         }
     }
@@ -375,11 +377,11 @@ impl Cpu {
 
         self.flags.sf = (result & 0x80) != 0;
         self.flags.zf = (result & 0xFF) == 0;
-        self.flags.hf = self.hf_add(self.reg.a, value as u8, self.flags.cf);
+        self.flags.hf = self.hf_add(self.reg.a, value as u8, true);
         self.flags.yf = (result & 0x20) != 0;
         self.flags.xf = (result & 0x08) != 0;
         self.flags.nf = false;
-        self.flags.pf = self.overflow(self.reg.a as i8, value as i8, result as i8);
+        self.flags.pf = self.overflow_add(self.reg.a, value as u8, result as u8);
         self.flags.cf = (result & 0x0100) != 0;
 
         self.reg.a = result as u8;
@@ -405,8 +407,8 @@ impl Cpu {
 
         self.flags.sf = (result & 0x80) != 0;
         self.flags.zf = (result & 0xFF) == 0;
-        self.flags.hf = self.hf_add(self.reg.a, value as u8, self.flags.cf);
-        self.flags.pf = self.overflow(self.reg.a as i8, value as i8, result as i8);
+        self.flags.hf = self.hf_add(self.reg.a, value as u8, true);
+        self.flags.pf = self.overflow_add(self.reg.a, value as u8, result as u8);
         self.flags.nf = false;
         self.flags.yf = (result & 0x20) != 0;
         self.flags.xf = (result & 0x08) != 0;
@@ -482,7 +484,7 @@ impl Cpu {
 
     // Can be consolidated into just simply using addressing modes..
 
-    fn add(&mut self, reg: Register) {
+    pub(crate) fn add(&mut self, reg: Register) {
         let value = self.read_reg(reg) as u16;
         if reg == HL {
             self.adv_cycles(3);
@@ -500,7 +502,7 @@ impl Cpu {
         self.flags.sf = (result & 0x80) != 0;
         self.flags.zf = (result & 0xFF) == 0;
         self.flags.hf = self.hf_add(self.reg.a, value as u8, false);
-        self.flags.pf = self.overflow(self.reg.a as i8, value as i8, result as i8);
+        self.flags.pf = self.overflow_add(self.reg.a, value as u8, result as u8);
         self.flags.nf = false;
         self.flags.yf = (result & 0x20) != 0;
         self.flags.xf = (result & 0x08) != 0;
@@ -521,7 +523,7 @@ impl Cpu {
         // Set CPU flags with new accumulator values
         self.flags.sf = (result & 0x80) != 0;
         self.flags.zf = (result & 0xFF) == 0;
-        self.flags.pf = self.overflow(self.reg.a as i8, value as i8, result as i8);
+        self.flags.pf = self.overflow_add(self.reg.a, value as u8, result as u8);
         self.flags.yf = (result & 0x20) != 0;
         self.flags.xf = (result & 0x08) != 0;
         self.flags.nf = false;
@@ -929,23 +931,19 @@ impl Cpu {
         self.adv_cycles(4);
         self.adv_pc(1);
     }
-    fn cmp(&mut self, reg: Register) {
-        let value = if reg == IxIm || reg == IyIm {
+    fn cp(&mut self, reg: Register) {
+        if reg == IxIm || reg == IyIm {
             self.adv_cycles(15);
             self.adv_pc(2);
-            self.read_reg(reg) as u16
         } else if reg == HL {
             self.adv_cycles(3);
-            self.memory[self.read_pair(HL)] as u16
-        } else {
-            self.read_reg(reg) as u16
-        };
+        }
         if reg == IXL || reg == IXH || reg == IYL || reg == IYL {
             self.adv_cycles(4);
             self.adv_pc(1);
         }
+        let value = self.read_reg(reg);
         let result = (self.reg.a as u16).wrapping_sub(value as u16);
-        let overflow = (self.reg.a as i8).overflowing_sub(value as i8).1;
 
         self.flags.sf = (result & 0x80) != 0;
         self.flags.zf = (result & 0xFF) == 0;
@@ -954,7 +952,7 @@ impl Cpu {
         // The XF & YF flags use the non compared value
         self.flags.yf = (value & 0x20) != 0;
         self.flags.xf = (value & 0x08) != 0;
-        self.flags.pf = overflow;
+        self.flags.pf = self.overflow_sub(self.reg.a, value, result as u8);
         self.flags.cf = (result & 0x0100) != 0;
 
         self.adv_cycles(4);
@@ -973,7 +971,8 @@ impl Cpu {
         self.flags.yf = (value & 0x20) != 0;
         self.flags.hf = self.hf_sub(self.reg.a, value as u8, false);
         self.flags.xf = (value & 0x08) != 0;
-        self.flags.pf = overflow;
+        self.flags.pf = self.overflow_sub(self.reg.a, value, result as u8);
+        // self.flags.pf = overflow;
         self.flags.nf = true;
         self.flags.cf = (result & 0x0100) != 0;
 
@@ -984,7 +983,7 @@ impl Cpu {
     fn cpi(&mut self) {
         let value = self.read8(self.read_pair(HL));
         let result = (self.reg.a as u16).wrapping_sub(value as u16);
-        let overflow = (self.reg.a as i8).overflowing_sub(value as i8).1;
+
         self.write_pair(HL, self.read_pair(HL).wrapping_add(1));
         self.write_pair(BC, self.read_pair(BC).wrapping_sub(1));
 
@@ -992,8 +991,7 @@ impl Cpu {
         self.flags.sf = (result & 0x80) != 0;
         self.flags.zf = (result & 0xFF) == 0;
         self.flags.hf = self.hf_sub(self.reg.a, value, false);
-        // self.flags.pf = self.overflow(value, result as u8);
-        self.flags.pf = overflow;
+        self.flags.pf = self.overflow_sub(self.reg.a, value, result as u8);
         // self.flags.cf = (result & 0x0100) != 0;
         self.flags.yf = (value & 0x20) != 0;
         self.flags.xf = (value & 0x08) != 0;
@@ -1027,10 +1025,11 @@ impl Cpu {
         if reg == IxIm || reg == IyIm {
             self.adv_pc(1);
         }
-        let result: u16 = match reg {
+        let (value, result) = match reg {
             A | B | C | D | E | H | L | HL | IXH | IXL | IYH | IYL | IxIm | IyIm => {
+                let value = self.read_reg(reg) as u16;
                 self.write_reg(reg, self.read_reg(reg).wrapping_sub(1));
-                self.read_reg(reg) as u16
+                (value, self.read_reg(reg) as u16)
             }
             _ => panic!("DEC on unsupported register: {:#?}", reg),
         };
@@ -1047,12 +1046,10 @@ impl Cpu {
             _ => {}
         }
 
-        let overflow = (result as i8).wrapping_add(1).overflowing_sub(1).1;
-
         self.flags.sf = (result & 0x80) != 0;
         self.flags.zf = result == 0;
-        self.flags.hf = self.hf_sub((result as u8).wrapping_add(1), 1, false);
-        self.flags.pf = overflow;
+        self.flags.hf = self.hf_sub(value as u8, 1, false);
+        self.flags.pf = self.overflow_sub(value as u8, 1, result as u8);
         self.flags.nf = true;
         self.flags.yf = (result & 0x20) != 0;
         self.flags.xf = (result & 0x08) != 0;
@@ -1068,7 +1065,6 @@ impl Cpu {
             self.adv_cycles(4);
             self.adv_pc(1);
         }
-
         self.adv_cycles(6);
         self.adv_pc(1);
     }
@@ -1190,7 +1186,6 @@ impl Cpu {
         self.flags.xf = (a & 0x08) != 0;
         self.flags.nf = false;
         self.flags.hf = false;
-        self.flags.pf = self.parity(self.reg.a as u8);
         self.adv_pc(2);
         self.adv_cycles(18);
     }
@@ -1485,14 +1480,16 @@ impl Cpu {
         if reg == IxIm || reg == IyIm {
             self.adv_pc(1);
         }
-        let result = match reg {
+        let (value, result) = match reg {
             A | B | C | D | E | H | L | HL | IXH | IXL | IYH | IYL => {
+                let value = self.read_reg(reg);
                 self.write_reg(reg, self.read_reg(reg).wrapping_add(1));
-                self.read_reg(reg)
+                (value, self.read_reg(reg))
             }
             IxIm | IyIm => {
+                let value = self.read_reg(reg);
                 self.write_reg(reg, self.read_reg(reg).wrapping_add(1));
-                self.read_reg(reg)
+                (value, self.read_reg(reg))
             }
             _ => panic!("INC on unsupported register"),
         };
@@ -1508,12 +1505,11 @@ impl Cpu {
             }
             _ => {}
         };
-        let overflow = (result as i8).wrapping_sub(1).overflowing_add(1).1;
 
         self.flags.sf = (result & 0x80) != 0;
         self.flags.zf = result == 0;
-        self.flags.hf = self.hf_add(result.wrapping_sub(1), 1, false);
-        self.flags.pf = overflow;
+        self.flags.hf = self.hf_add(value, 1, false);
+        self.flags.pf = self.overflow_add(value, 1, result as u8);
         self.flags.nf = false;
         self.flags.yf = (result & 0x20) != 0;
         self.flags.xf = (result & 0x08) != 0;
@@ -1546,39 +1542,36 @@ impl Cpu {
 
     // SBC Subtract Register or Memory from Accumulator with carry flag
     fn sbc(&mut self, dst: Register, src: Register) {
-        let value = if src != HL {
-            self.read_reg(src) as u16
-        } else if src == IyIm || src == IxIm {
+        let value = self.read_reg(src).wrapping_add(self.flags.cf as u8);
+        // let result = a + b + self.flags.cf;
+        let result = (self.reg.a as u16)
+            .wrapping_sub(self.read_reg(src).wrapping_sub(u8::from(self.flags.cf)) as u16);
+
+        if src == IyIm || src == IxIm {
             self.adv_pc(2);
             self.adv_cycles(15);
-            self.read_reg(src) as u16
-        } else {
+        } else if src == HL {
             self.adv_cycles(3);
-            self.memory[self.read_pair(HL)] as u16
-        };
+        }
 
         if src == IXL || src == IYL || src == IYH || src == IXH {
             self.adv_cycles(4);
             self.adv_pc(2);
         }
 
-        let result = (dst as u16)
-            .wrapping_sub(value)
-            .wrapping_sub(self.flags.cf as u16);
-
-        // let overflow = (dst as i8).overflowing_sub((value as i8).overflowing_sub(self.flags.cf as i8).0);
-        // self.flags.pf = overflow.1;
-
+        /*let result: i16 = (self.read_reg(dst) as i16)
+            .wrapping_sub(self.flags.cf as i16)
+            .wrapping_sub(value as i16);
+        */
         self.flags.sf = (result & 0x80) != 0;
         self.flags.zf = (result & 0xFF) == 0;
-        self.flags.hf = self.hf_sub(self.read_reg(dst), value as u8, true);
-        self.flags.pf = self.overflow(self.read_reg(dst) as i8, value as i8, result as i8);
+        self.flags.hf = self.hf_sub(self.read_reg(dst), self.read_reg(src), true);
+        self.flags.pf = self.overflow_sub(self.read_reg(dst), value, result as u8);
         self.flags.yf = (result & 0x20) != 0;
         self.flags.xf = (result & 0x08) != 0;
         self.flags.cf = (result & 0x0100) != 0;
         self.flags.nf = true;
         self.write_reg(dst, result as u8);
-
         self.adv_cycles(4);
         self.adv_pc(1);
     }
@@ -1619,7 +1612,8 @@ impl Cpu {
         self.flags.sf = (result & 0x80) != 0;
         self.flags.zf = (result & 0xFF) == 0;
         self.flags.hf = self.hf_sub(self.reg.a, value as u8, false);
-        self.flags.pf = overflow;
+        // self.flags.pf = overflow;
+        self.flags.pf = self.overflow_sub(imm, value, result as u8);
         self.flags.yf = (result & 0x20) != 0;
         self.flags.xf = (result & 0x08) != 0;
         self.flags.nf = true;
@@ -1631,8 +1625,8 @@ impl Cpu {
     }
 
     // SUB Subtract Register or Memory From Accumulator
-    fn sub(&mut self, src: Register) {
-        let value = self.read_reg(src) as u16;
+    pub(crate) fn sub(&mut self, src: Register) {
+        let value = self.read_reg(src);
         if src == IXH || src == IYL || src == IXL || src == IYH {
             self.adv_pc(1);
             self.adv_cycles(4);
@@ -1644,17 +1638,18 @@ impl Cpu {
             self.adv_cycles(15);
             self.adv_pc(2);
         }
-        let result = (self.reg.a as u16).wrapping_sub(value as u16);
-        let overflow = (self.reg.a as i8).overflowing_sub(value as i8).1;
+        // let result = (self.reg.a as u16).wrapping_sub(value as u16);
+        let (result, overflow) = (self.reg.a).overflowing_sub(value);
 
         self.flags.sf = (result & 0x80) != 0;
         self.flags.zf = (result & 0xFF) == 0;
-        self.flags.hf = self.hf_sub(self.reg.a, value as u8, false);
-        self.flags.pf = overflow;
+        self.flags.hf = self.hf_sub(self.reg.a, value, false);
+        self.flags.pf = self.overflow_sub(self.reg.a, value, result as u8);
         self.flags.nf = true;
         self.flags.yf = (result & 0x20) != 0;
         self.flags.xf = (result & 0x08) != 0;
-        self.flags.cf = (result & 0x0100) != 0;
+        // self.flags.cf = (result & 0x0100) != 0;
+        self.flags.cf = overflow;
         self.reg.a = result as u8;
 
         self.adv_cycles(4);
@@ -1670,8 +1665,7 @@ impl Cpu {
         self.flags.sf = (result & 0x80) != 0;
         self.flags.zf = (result & 0xFF) == 0;
         self.flags.hf = self.hf_sub(self.reg.a, value as u8, false);
-        self.flags.pf = self.overflow(self.reg.a as i8, value as i8, result as i8);
-        self.flags.pf = overflow;
+        self.flags.pf = self.overflow_sub(self.reg.a, value, result as u8);
         self.flags.nf = true;
         self.flags.yf = (result & 0x20) != 0;
         self.flags.xf = (result & 0x08) != 0;
@@ -1695,13 +1689,10 @@ impl Cpu {
 
     // XRA Logical Exclusive-Or memory with Accumulator (Zero accumulator)
     fn xor(&mut self, reg: Register) {
-        let value: u16 = if reg != HL {
-            self.read_reg(reg) as u16
-        } else {
+        let value = self.read_reg(reg);
+        if reg == HL {
             self.adv_cycles(3);
-            self.memory[self.read_pair(HL)] as u16
-        };
-        if reg == IxIm || reg == IyIm {
+        } else if reg == IxIm || reg == IyIm {
             self.adv_pc(2);
             self.adv_pc(15);
         }
@@ -1711,8 +1702,9 @@ impl Cpu {
             self.adv_pc(1);
         }
 
-        let result = self.reg.a as u16 ^ value as u16;
-
+        let result: u8 = self.reg.a.bitxor(value);
+        // Issue here is the value of memory[HL] is wrong?
+        // in Zazu's emulator the value passed to XOR is 0xe5 with a result of 0x00db
         self.flags.sf = (result & 0x80) != 0;
         self.flags.zf = (result & 0xFF) == 0;
         self.flags.hf = false;
@@ -1721,8 +1713,7 @@ impl Cpu {
         self.flags.xf = (result & 0x08) != 0;
         self.flags.cf = false;
         self.flags.pf = self.parity(result as u8);
-        self.reg.a = result as u8;
-
+        self.reg.a = result;
         self.adv_cycles(4);
         self.adv_pc(1);
     }
@@ -1935,7 +1926,12 @@ impl Cpu {
         self.flags.sf = (result & 0x80) != 0;
         self.flags.zf = (result & 0xFF) == 0;
         self.flags.hf = self.hf_sub(self.reg.a, value as u8, false);
-        self.flags.pf = overflow;
+        // self.flags.pf = overflow;
+        self.flags.pf = self.overflow_sub(
+            self.reg.a,
+            0_u16.wrapping_sub(self.reg.a as u16) as u8,
+            result as u8,
+        );
         self.flags.nf = true;
         self.flags.yf = (result & 0x20) != 0;
         self.flags.xf = (result & 0x08) != 0;
@@ -2177,14 +2173,14 @@ impl Cpu {
             0xB7 => self.ora(A),
 
             // CMP
-            0xB8 => self.cmp(B),
-            0xB9 => self.cmp(C),
-            0xBA => self.cmp(D),
-            0xBB => self.cmp(E),
-            0xBC => self.cmp(H),
-            0xBD => self.cmp(L),
-            0xBE => self.cmp(HL),
-            0xBF => self.cmp(A),
+            0xB8 => self.cp(B),
+            0xB9 => self.cp(C),
+            0xBA => self.cp(D),
+            0xBB => self.cp(E),
+            0xBC => self.cp(H),
+            0xBD => self.cp(L),
+            0xBE => self.cp(HL),
+            0xBF => self.cp(A),
 
             0xC0 => self.ret_cond(!self.flags.zf),
             0xC1 => self.pop(BC),
@@ -2588,9 +2584,9 @@ impl Cpu {
                     0xB4 => self.ora(IXH),
                     0xB5 => self.ora(IXL),
                     0xB6 => self.ora(IxIm),
-                    0xBC => self.cmp(IXH),
-                    0xBD => self.cmp(IXH),
-                    0xBE => self.cmp(IxIm),
+                    0xBC => self.cp(IXH),
+                    0xBD => self.cp(IXH),
+                    0xBE => self.cp(IxIm),
                     // DDCB
                     0xCB => {
                         // self.next_opcode = self.read8(self.reg.pc.wrapping_add(1)) as u16;
@@ -2811,9 +2807,9 @@ impl Cpu {
                     0xB4 => self.ora(IYH),
                     0xB5 => self.ora(IYL),
                     0xB6 => self.ora(IyIm),
-                    0xBC => self.cmp(IYH),
-                    0xBD => self.cmp(IYH),
-                    0xBE => self.cmp(IyIm),
+                    0xBC => self.cp(IYH),
+                    0xBD => self.cp(IYH),
+                    0xBE => self.cp(IyIm),
                     0xCB => {
                         let next_opcode = self.read8(self.reg.pc + 2);
                         match next_opcode {
@@ -2841,10 +2837,7 @@ impl Cpu {
             }
             0xFE => self.cp_im(),
             0xFF => self.rst(0x0038),
-            _ => panic!(
-                "Unknown or unimplemented instruction:{:#?}",
-                Instruction::decode(self)
-            ),
+            _ => panic!("Unknown or unimplemented instruction:{:#?}"), // Instruction::decode(self)
         }
     }
 
@@ -2912,19 +2905,28 @@ impl Cpu {
     fn hf_sub_w(&self, a: u16, b: u16, carry: bool) -> bool {
         // True if there has been a borrow from bit 12
         // In the case for ADC or SBC instructions we need to take the carry flag into account
+        let a = a as i16;
+        let b = b as i16;
         if !carry {
             (((a & 0xFFF) - (b & 0xFFF)) & (1 << 12)) != 0
         } else {
-            ((a & 0xFFF).wrapping_sub((b & 0xFFF) as u16 + self.flags.cf as u16) & (1 << 12)) != 0
+            let cf = self.flags.cf as i16;
+            ((a & 0xFFF).wrapping_sub((b & 0xFFF) + cf) & (1 << 12)) != 0
         }
     }
 
-    fn overflow(&mut self, a: i8, b: i8, result: i8) -> bool {
-        // Overflow should be set if the 2-complement result does not fit the register
-        // Set overflow flag when A and the B have the same sign
-        // and A and the result have different sign
+    // Overflow should be set if the 2-complement result does not fit the register
+    // Set overflow flag when A and the B have the same sign
+    // and A and the result have different sign
+    fn overflow_add(&mut self, a: u8, b: u8, result: u8) -> bool {
         (a.wrapping_shr(7) == (b.wrapping_shr(7)))
             && ((a.wrapping_shr(7)) != (result.wrapping_shr(7)))
+    }
+
+    fn overflow_sub(&mut self, a: u8, b: u8, result: u8) -> bool {
+        // (a >> 7) != (b >> 7) && (b >> 7) == (result >> 7)
+        (a.wrapping_shr(7)) != (b.wrapping_shr(7))
+            && (b.wrapping_shr(7)) == (result.wrapping_shr(7))
     }
 
     pub(crate) fn poll_interrupt(&mut self) {

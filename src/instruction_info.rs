@@ -71,8 +71,8 @@ impl fmt::UpperHex for Register {
 
 impl Instruction {
     pub fn print_disassembly(cpu: &Cpu) {
-        eprintln!(
-            "{:02X} {:02X} {:02X} {:02X})\t",
+        println!(
+            "{:02X} {:02X} {:02X} {:02X}\t",
             cpu.read8(cpu.reg.pc),
             cpu.read8(cpu.reg.pc.wrapping_add(1)),
             cpu.read8(cpu.reg.pc.wrapping_add(2)),

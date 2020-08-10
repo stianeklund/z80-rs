@@ -36,7 +36,8 @@ impl Interconnect {
     pub fn run_tests(&mut self) {
         self.cpu.fetch();
         if self.cpu.debug {
-            self.debug_decode();
+            // self.debug_decode();
+            println!("{:#?}", self.cpu);
         }
         self.cpu.decode(self.cpu.opcode);
     }
